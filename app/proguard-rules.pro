@@ -1,0 +1,2 @@
+-keep class com.pingip.app.ShellUserService { *; }
+-keep class com.pingip.app.IShellService** { *; }
