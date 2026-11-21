@@ -146,7 +146,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
-        // Jeda pemantauan UI saat aplikasi di latar belakang agar nol beban RAM/CPU
         collectJob?.cancel()
         collectJob = null
         super.onStop()
@@ -261,7 +260,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshShizukuStatus() {
         val cfg = PingConfig.load(this)
         if (cfg.execMode == PingConfig.MODE_ROOT) {
-            tvShizuku.text = "Akses: Mode Root (su) • Watcher Native"
+            tvShizuku.text = "Akses: Root Persistent (1 Sesi su) • Watcher Native"
             btnShizukuPerm.visibility = View.GONE
             return
         }
@@ -356,11 +355,11 @@ class MainActivity : AppCompatActivity() {
         etVpnPkg.setText(cfg.vpnPkg)
 
         AlertDialog.Builder(this)
-            .setTitle("Pengaturan PingIP v4.4")
+            .setTitle("Pengaturan PingIP v4.5")
             .setView(view)
             .setPositiveButton("Simpan") { _, _ ->
                 val updated = PingConfig(
-                    target = etTarget.text.toString().trim().ifEmpty { "dns.google" },
+                    target = etTarget.text.toString().trim().ifEmpty { "1.1.1.1" },
                     fallbackTarget = etFallbackTarget.text.toString().trim(),
                     pingMode = if (rbTcp.isChecked) PingConfig.PING_TCP else PingConfig.PING_HTTPS,
                     intervalSec = (etInterval.text.toString().toDoubleOrNull() ?: cfg.intervalSec).coerceAtLeast(0.0),

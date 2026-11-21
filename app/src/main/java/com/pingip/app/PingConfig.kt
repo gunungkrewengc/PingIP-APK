@@ -3,14 +3,14 @@ package com.pingip.app
 import android.content.Context
 
 data class PingConfig(
-    val target: String = "dns.google",
+    val target: String = "1.1.1.1",
     val fallbackTarget: String = "",
     val pingMode: String = PING_HTTPS,
-    val intervalSec: Double = 0.5,
-    val timeoutSec: Double = 3.0,
+    val intervalSec: Double = 1.0,
+    val timeoutSec: Double = 1.0,
     val maxFail: Int = 2,
-    val airplaneDelaySec: Double = 1.0,
-    val cooldownSec: Double = 4.0,
+    val airplaneDelaySec: Double = 0.5,
+    val cooldownSec: Double = 8.0,
     val watcherIntervalSec: Double = 0.5,
     val shizukuRetrySec: Double = 2.0,
     val maxLines: Int = 100,
@@ -31,14 +31,14 @@ data class PingConfig(
         fun load(context: Context): PingConfig {
             val p = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             return PingConfig(
-                target = p.getString("target", "dns.google") ?: "dns.google",
+                target = p.getString("target", "1.1.1.1") ?: "1.1.1.1",
                 fallbackTarget = p.getString("fallbackTarget", "") ?: "",
                 pingMode = p.getString("pingMode", PING_HTTPS) ?: PING_HTTPS,
-                intervalSec = (p.getString("intervalSec", "0.5")?.toDoubleOrNull() ?: 0.5).coerceAtLeast(0.0),
-                timeoutSec = (p.getString("timeoutSec", "3.0")?.toDoubleOrNull() ?: 3.0).coerceAtLeast(0.5),
+                intervalSec = (p.getString("intervalSec", "1.0")?.toDoubleOrNull() ?: 1.0).coerceAtLeast(0.0),
+                timeoutSec = (p.getString("timeoutSec", "1.0")?.toDoubleOrNull() ?: 1.0).coerceAtLeast(0.5),
                 maxFail = (p.getInt("maxFail", 2)).coerceAtLeast(1),
-                airplaneDelaySec = (p.getString("airplaneDelaySec", "1.0")?.toDoubleOrNull() ?: 1.0).coerceAtLeast(0.0),
-                cooldownSec = (p.getString("cooldownSec", "4.0")?.toDoubleOrNull() ?: 4.0).coerceAtLeast(0.0),
+                airplaneDelaySec = (p.getString("airplaneDelaySec", "0.5")?.toDoubleOrNull() ?: 0.5).coerceAtLeast(0.0),
+                cooldownSec = (p.getString("cooldownSec", "8.0")?.toDoubleOrNull() ?: 8.0).coerceAtLeast(0.0),
                 watcherIntervalSec = (p.getString("watcherIntervalSec", "0.5")?.toDoubleOrNull() ?: 0.5).coerceAtLeast(0.2),
                 shizukuRetrySec = (p.getString("shizukuRetrySec", "2.0")?.toDoubleOrNull() ?: 2.0).coerceAtLeast(0.5),
                 maxLines = (p.getInt("maxLines", 100)).coerceAtLeast(20),
@@ -53,7 +53,7 @@ data class PingConfig(
 
         fun save(context: Context, cfg: PingConfig) {
             context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
-                .putString("target", cfg.target.trim().ifEmpty { "dns.google" })
+                .putString("target", cfg.target.trim().ifEmpty { "1.1.1.1" })
                 .putString("fallbackTarget", cfg.fallbackTarget.trim())
                 .putString("pingMode", cfg.pingMode)
                 .putString("intervalSec", cfg.intervalSec.coerceAtLeast(0.0).toString())

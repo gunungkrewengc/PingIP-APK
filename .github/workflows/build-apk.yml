@@ -30,16 +30,17 @@ jobs:
             yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           fi
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon
+      - name: Build Optimized Release APK (R8 Shrunk)
+        run: gradle assembleRelease --no-daemon
 
-      - name: Rename APK
+      - name: Rename APK & Show Size
         run: |
           mkdir -p release-apk
-          cp app/build/outputs/apk/debug/app-debug.apk release-apk/PingIP-v4.4.apk
+          cp app/build/outputs/apk/release/app-release.apk release-apk/PingIP-v4.5.apk
+          ls -lh release-apk/PingIP-v4.5.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PingIP-v4.4-APK
-          path: release-apk/PingIP-v4.4.apk
+          name: PingIP-v4.5-APK
+          path: release-apk/PingIP-v4.5.apk

@@ -11,17 +11,22 @@ android {
         applicationId = "com.pingip.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 44
-        versionName = "4.4"
+        versionCode = 46
+        versionName = "4.5"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            isMinifyEnabled = false
         }
     }
 

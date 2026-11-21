@@ -20,6 +20,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.service.quicksettings.TileService
 import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
@@ -38,7 +39,8 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.Executors
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -55,9 +57,17 @@ class PingService : Service() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val pingExecutor = Executors.newCachedThreadPool { r ->
+    private val pingExecutor = ThreadPoolExecutor(
+        0,
+        6,
+        30L,
+        TimeUnit.SECONDS,
+        SynchronousQueue()
+    ) { r ->
         Thread(r, "PingIP-Net").apply { isDaemon = true }
     }
+    private val rootShell = RootShell()
+
     private var mainJob: Job? = null
     private var watcherJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -82,6 +92,9 @@ class PingService : Service() {
 
     @Volatile
     private var manualPaused: Boolean = false
+
+    @Volatile
+    private var useShellDataFallback: Boolean = false
 
     @Volatile
     private var lastNotifUpdateMs: Long = 0L
@@ -198,6 +211,8 @@ class PingService : Service() {
         mainJob = null
         watcherJob = null
         manualPaused = false
+        useShellDataFallback = false
+        rootShell.close()
         try {
             Shizuku.unbindUserService(userServiceArgs, serviceConnection, true)
         } catch (_: Exception) {
@@ -232,6 +247,7 @@ class PingService : Service() {
     private fun startMonitoring() {
         val cfg = PingConfig.load(this)
         manualPaused = false
+        useShellDataFallback = false
         PingStateStore.setRunning(true)
         PingStateStore.setPaused(false)
         PingStateStore.resetStats(SystemClock.elapsedRealtime())
@@ -240,7 +256,7 @@ class PingService : Service() {
 
         val antiLoopInfo = if (cfg.antiLoopLimit > 0) "${cfg.antiLoopLimit}x->${cfg.antiLoopCooldownSec}s" else "OFF"
         log(
-            "=== PingIP v4.4 (${cfg.execMode.uppercase()} | ${cfg.pingMode.uppercase()} | ON-OFF: ${cfg.airplaneDelaySec}s | CD: ${cfg.cooldownSec}s | Ping: ${cfg.intervalSec}s | AntiLoop: $antiLoopInfo) ===",
+            "=== PingIP v4.5 (${cfg.execMode.uppercase()} | ${cfg.pingMode.uppercase()} | ON-OFF: ${cfg.airplaneDelaySec}s | CD: ${cfg.cooldownSec}s | Ping: ${cfg.intervalSec}s | AntiLoop: $antiLoopInfo) ===",
             cfg.maxLines
         )
 
@@ -249,7 +265,7 @@ class PingService : Service() {
             var failCount = 0
             var consecutiveToggles = 0
 
-            // 1. Cek Shizuku / Root di awal saja (mengikuti SHIZUKU_RETRY)
+            // 1. Buka 1 sesi Shizuku atau 1 sesi Persistent Root Shell di awal
             if (cfg.execMode == PingConfig.MODE_SHIZUKU) {
                 val retryMs = (cfg.shizukuRetrySec.coerceAtLeast(0.5) * 1000).toLong()
                 var bindRequested = false
@@ -289,14 +305,13 @@ class PingService : Service() {
                     pauseReason = ""
                 }
             } else {
-                val idOut = execShell(cfg.execMode, "id")
-                if (!idOut.contains("uid=0")) {
+                if (!rootShell.openAndVerify(18000L)) {
                     log("[${now()}] [!] Akses Root (su) ditolak atau tidak tersedia.", cfg.maxLines)
                     updateStatus("Gagal: Root tidak tersedia", forceNotif = true)
                     stopMonitoring()
                     return@launch
                 }
-                log("[${now()}] Root (su) aktif! Memulai pemantauan...", cfg.maxLines)
+                log("[${now()}] Root Persistent Shell aktif (1 sesi su)! Memulai pemantauan...", cfg.maxLines)
             }
 
             // 2. Jalankan watcher native Android (0 panggilan shell saat stabil)
@@ -373,8 +388,7 @@ class PingService : Service() {
                     updateStatus("TIMEOUT ($failCount/${cfg.maxFail})", forceNotif = true)
 
                     if (failCount >= cfg.maxFail) {
-                        // Pengaman real-time native anti-bablas Mode Pesawat (instan 0ms)
-                        val liveData = isMobileDataEnabledNative()
+                        // Pengaman real-time anti-bablas (cek native + verifikasi shell persisten sebelum Mode Pesawat)
                         val liveNet = readNativeNetFlags()
                         if (cfg.pauseOnWifi && liveNet.first) {
                             log("[${now()}] JEDA: Wi-Fi aktif (Mode Pesawat dibatalkan)", cfg.maxLines)
@@ -384,6 +398,18 @@ class PingService : Service() {
                             delay(500)
                             continue
                         }
+
+                        val liveNativeData = readMobileDataNative()
+                        val liveData = if (liveNativeData == false) {
+                            false
+                        } else {
+                            val shellData = checkMobileDataViaShell(cfg.execMode)
+                            if (!shellData) {
+                                useShellDataFallback = true
+                                dataOk = false
+                            }
+                            shellData
+                        }
                         if (!liveData) {
                             log("[${now()}] JEDA: Data seluler mati (Mode Pesawat dibatalkan)", cfg.maxLines)
                             updateStatus("JEDA: Data seluler mati", forceNotif = true)
@@ -392,6 +418,7 @@ class PingService : Service() {
                             delay(500)
                             continue
                         }
+
                         if (!liveNet.second) {
                             log("[${now()}] JEDA: VPN belum konek (Mode Pesawat dibatalkan)", cfg.maxLines)
                             updateStatus("JEDA: Menunggu VPN", forceNotif = true)
@@ -449,9 +476,29 @@ class PingService : Service() {
         watcherJob = scope.launch {
             var cachedPkgOk = false
             var lastVerifyMs = 0L
+            var lastShellDataMs = 0L
+            var lastShellDataVal = true
 
             while (isActive) {
-                val curData = isMobileDataEnabledNative()
+                val curData = if (!useShellDataFallback) {
+                    val nativeVal = readMobileDataNative()
+                    if (nativeVal != null) {
+                        nativeVal
+                    } else {
+                        useShellDataFallback = true
+                        lastShellDataMs = SystemClock.elapsedRealtime()
+                        lastShellDataVal = checkMobileDataViaShell(cfg.execMode)
+                        lastShellDataVal
+                    }
+                } else {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    if (lastShellDataMs == 0L || nowMs - lastShellDataMs >= 1000L) {
+                        lastShellDataMs = nowMs
+                        lastShellDataVal = checkMobileDataViaShell(cfg.execMode)
+                    }
+                    lastShellDataVal
+                }
+
                 val netFlags = readNativeNetFlags()
                 val curWifi = netFlags.first
                 val curVpnIface = netFlags.second
@@ -467,7 +514,6 @@ class PingService : Service() {
                 } else if (vpnPkg.isEmpty()) {
                     vpnOk = true
                 } else if (cachedPkgOk) {
-                    // Sudah terverifikasi milik paket VPN yang benar -> 0 panggilan shell!
                     vpnOk = true
                 } else {
                     val nowMs = SystemClock.elapsedRealtime()
@@ -484,32 +530,97 @@ class PingService : Service() {
         }
     }
 
-    private fun isMobileDataEnabledNative(): Boolean {
+    private fun safeGlobalSetting(key: String): String? {
         return try {
-            val cr = contentResolver
-            val subGlobal = Settings.Global.getString(cr, "multi_sim_data_call")?.trim()
-            if (!subGlobal.isNullOrEmpty() && subGlobal.all { it.isDigit() }) {
-                val v = Settings.Global.getString(cr, "mobile_data$subGlobal")?.trim()
-                if (v == "0" || v == "1") return v == "1"
-            }
-
-            val defSub = SubscriptionManager.getDefaultDataSubscriptionId()
-            if (defSub != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
-                val v = Settings.Global.getString(cr, "mobile_data$defSub")?.trim()
-                if (v == "0" || v == "1") return v == "1"
-            }
-
-            val simValues = listOf("mobile_data1", "mobile_data2", "mobile_data0")
-                .mapNotNull { Settings.Global.getString(cr, it)?.trim() }
-                .filter { it == "0" || it == "1" }
-            if (simValues.isNotEmpty()) {
-                return simValues.any { it == "1" }
-            }
-
-            Settings.Global.getString(cr, "mobile_data")?.trim() == "1"
-        } catch (_: Exception) {
-            true
+            Settings.Global.getString(contentResolver, key)?.trim()
+        } catch (_: Throwable) {
+            null
         }
+    }
+
+    private fun readMobileDataNative(): Boolean? {
+        try {
+            val baseTm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            val defSub = SubscriptionManager.getDefaultDataSubscriptionId()
+            val tm = if (defSub != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                baseTm.createForSubscriptionId(defSub)
+            } else {
+                baseTm
+            }
+            return tm.isDataEnabled
+        } catch (_: Throwable) {
+        }
+
+        val defSub = try {
+            SubscriptionManager.getDefaultDataSubscriptionId()
+        } catch (_: Throwable) {
+            SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        }
+        if (defSub != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+            val v = safeGlobalSetting("mobile_data$defSub")
+            if (v == "0" || v == "1") return v == "1"
+        }
+
+        val subGlobal = safeGlobalSetting("multi_sim_data_call")
+        if (!subGlobal.isNullOrEmpty() && subGlobal.all { it.isDigit() }) {
+            val v = safeGlobalSetting("mobile_data$subGlobal")
+            if (v == "0" || v == "1") return v == "1"
+        }
+
+        val globalMd = safeGlobalSetting("mobile_data")
+        if (globalMd == "0" || globalMd == "1") return globalMd == "1"
+
+        return null
+    }
+
+    private fun checkMobileDataViaShell(execMode: String): Boolean {
+        val defSub = try {
+            SubscriptionManager.getDefaultDataSubscriptionId()
+        } catch (_: Throwable) {
+            SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        }
+        val defSubStr = if (defSub != SubscriptionManager.INVALID_SUBSCRIPTION_ID) defSub.toString() else ""
+        val d = "$"
+        val cmd = """
+            DEF_SUB='$defSubStr'
+            res=""
+            if [ -n "${d}DEF_SUB" ]; then
+                md_def=${d}(settings get global "mobile_data${d}DEF_SUB" 2>/dev/null | tr -d '\r\n')
+                if [ "${d}md_def" = '0' ] || [ "${d}md_def" = '1' ]; then
+                    res="${d}md_def"
+                fi
+            fi
+
+            if [ -z "${d}res" ]; then
+                sub=${d}(settings get global multi_sim_data_call 2>/dev/null | tr -d '\r\n')
+                case "${d}sub" in
+                    [0-9]*)
+                        md_sub=${d}(settings get global "mobile_data${d}sub" 2>/dev/null | tr -d '\r\n')
+                        if [ "${d}md_sub" = '0' ] || [ "${d}md_sub" = '1' ]; then
+                            res="${d}md_sub"
+                        fi
+                        ;;
+                esac
+            fi
+
+            if [ -z "${d}res" ]; then
+                md=${d}(settings get global mobile_data 2>/dev/null | tr -d '\r\n')
+                if [ "${d}md" = '0' ]; then
+                    res="0"
+                else
+                    ma=${d}(settings list global 2>/dev/null | grep -E '^mobile_data[0-9]+=')
+                    if [ -n "${d}ma" ]; then
+                        echo "${d}ma" | grep -q '=1${d}' && res="1" || res="0"
+                    else
+                        [ "${d}md" = '1' ] && res="1" || res="0"
+                    fi
+                fi
+            fi
+            echo "DATA_STATE:${d}res"
+        """.trimIndent()
+        val out = execShell(execMode, cmd)
+        val line = out.lines().lastOrNull { it.startsWith("DATA_STATE:") }?.trim()
+        return line != "DATA_STATE:0"
     }
 
     @Suppress("DEPRECATION")
@@ -540,21 +651,22 @@ class PingService : Service() {
         val d = "$"
         val cmd = """
             VPN_PKG='$safePkg'
+            matched=0
             vman=${d}(dumpsys vpn_management 2>/dev/null)
             if [ -n "${d}vman" ]; then
                 if echo "${d}vman" | grep -q "${d}VPN_PKG"; then
-                    echo "VPN_MATCH:1"; exit 0
+                    matched=1
                 elif ! echo "${d}vman" | grep -qE 'mPackage=|Package:'; then
-                    dumpsys activity services "${d}VPN_PKG" 2>/dev/null | grep -qE 'isForeground=true|VpnService|TunnelVpn' && { echo "VPN_MATCH:1"; exit 0; }
+                    dumpsys activity services "${d}VPN_PKG" 2>/dev/null | grep -qE 'isForeground=true|VpnService|TunnelVpn' && matched=1
                 fi
             else
                 if dumpsys connectivity 2>/dev/null | grep -iE "vpn|${d}VPN_PKG" | grep -q "${d}VPN_PKG"; then
-                    echo "VPN_MATCH:1"; exit 0
+                    matched=1
                 elif dumpsys activity services "${d}VPN_PKG" 2>/dev/null | grep -qE 'isForeground=true|VpnService|TunnelVpn'; then
-                    echo "VPN_MATCH:1"; exit 0
+                    matched=1
                 fi
             fi
-            echo "VPN_MATCH:0"
+            echo "VPN_MATCH:${d}matched"
         """.trimIndent()
         val out = execShell(execMode, cmd)
         return out.lines().any { it.trim() == "VPN_MATCH:1" }
@@ -648,38 +760,7 @@ class PingService : Service() {
 
     private fun execShell(execMode: String, command: String): String {
         return if (execMode == PingConfig.MODE_ROOT) {
-            try {
-                val pb = ProcessBuilder("su", "-c", command)
-                pb.redirectErrorStream(true)
-                val proc = pb.start()
-                val outBuf = StringBuilder()
-                val readerThread = Thread {
-                    try {
-                        proc.inputStream.bufferedReader().use { br ->
-                            val buf = CharArray(2048)
-                            var n: Int
-                            while (br.read(buf).also { n = it } != -1) {
-                                if (outBuf.length < 32768) {
-                                    outBuf.append(buf, 0, n)
-                                }
-                            }
-                        }
-                    } catch (_: Exception) {
-                    }
-                }
-                readerThread.start()
-                val ok = proc.waitFor(12, TimeUnit.SECONDS)
-                if (!ok) {
-                    proc.destroyForcibly()
-                    readerThread.join(500)
-                    "ERR:TIMEOUT"
-                } else {
-                    readerThread.join(1000)
-                    outBuf.toString()
-                }
-            } catch (e: Exception) {
-                "ERR:${e.message}"
-            }
+            rootShell.exec(command, 12000L)
         } else {
             try {
                 if (shellService == null) {
@@ -783,7 +864,7 @@ class PingService : Service() {
         )
 
         val stats = PingStateStore.stats.value
-        val title = if (stats.toggleCount > 0) "PingIP v4.4 • Toggle: ${stats.toggleCount}x" else "PingIP v4.4"
+        val title = if (stats.toggleCount > 0) "PingIP v4.5 • Toggle: ${stats.toggleCount}x" else "PingIP v4.5"
         val pauseLabel = if (manualPaused) "Lanjut" else "Jeda"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
