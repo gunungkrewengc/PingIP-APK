@@ -9,7 +9,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="PingIP v4.3"
+        android:text="PingIP v4.4"
         android:textColor="@color/text_primary"
         android:textSize="22sp"
         android:textStyle="bold" />
@@ -33,6 +33,15 @@
         android:textColor="@color/text_secondary"
         android:textSize="12sp" />
 
+    <TextView
+        android:id="@+id/tvStats"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Aktif: -  |  Mode Pesawat: 0x  |  Terakhir: -"
+        android:textColor="#CBD5E1"
+        android:textSize="11.5sp" />
+
     <Button
         android:id="@+id/btnShizukuPerm"
         android:layout_width="match_parent"
@@ -43,15 +52,28 @@
         android:textColor="@color/text_primary"
         android:visibility="gone" />
 
+    <Button
+        android:id="@+id/btnBatteryOpt"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:layout_marginTop="6dp"
+        android:backgroundTint="@color/accent_amber"
+        android:minHeight="0dp"
+        android:paddingVertical="4dp"
+        android:text="NONAKTIFKAN PEMBATASAN BATERAI"
+        android:textColor="@color/text_primary"
+        android:textSize="11.5sp"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/tvSummary"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="8dp"
         android:background="@color/card_dark"
         android:padding="10dp"
         android:textColor="@color/text_secondary"
-        android:textSize="11.5sp" />
+        android:textSize="11sp" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -85,7 +107,7 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="10dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
@@ -97,6 +119,19 @@
             android:textColor="@color/text_secondary"
             android:textSize="11sp"
             android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnCopyLog"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:layout_marginEnd="6dp"
+            android:backgroundTint="@color/card_dark"
+            android:minHeight="0dp"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="4dp"
+            android:text="Salin"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
 
         <Button
             android:id="@+id/btnClearLog"

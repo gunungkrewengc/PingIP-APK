@@ -4,6 +4,8 @@ import android.content.Context
 
 data class PingConfig(
     val target: String = "dns.google",
+    val fallbackTarget: String = "",
+    val pingMode: String = PING_HTTPS,
     val intervalSec: Double = 0.5,
     val timeoutSec: Double = 3.0,
     val maxFail: Int = 2,
@@ -13,17 +15,25 @@ data class PingConfig(
     val shizukuRetrySec: Double = 2.0,
     val maxLines: Int = 100,
     val vpnPkg: String = "xyz.easypro.httpcustom",
-    val execMode: String = MODE_SHIZUKU
+    val execMode: String = MODE_SHIZUKU,
+    val pauseOnWifi: Boolean = true,
+    val compactLog: Boolean = false,
+    val antiLoopLimit: Int = 5,
+    val antiLoopCooldownSec: Double = 30.0
 ) {
     companion object {
         const val MODE_SHIZUKU = "shizuku"
         const val MODE_ROOT = "root"
+        const val PING_HTTPS = "https"
+        const val PING_TCP = "tcp"
         private const val PREF_NAME = "pingip_prefs"
 
         fun load(context: Context): PingConfig {
             val p = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             return PingConfig(
                 target = p.getString("target", "dns.google") ?: "dns.google",
+                fallbackTarget = p.getString("fallbackTarget", "") ?: "",
+                pingMode = p.getString("pingMode", PING_HTTPS) ?: PING_HTTPS,
                 intervalSec = (p.getString("intervalSec", "0.5")?.toDoubleOrNull() ?: 0.5).coerceAtLeast(0.0),
                 timeoutSec = (p.getString("timeoutSec", "3.0")?.toDoubleOrNull() ?: 3.0).coerceAtLeast(0.5),
                 maxFail = (p.getInt("maxFail", 2)).coerceAtLeast(1),
@@ -33,13 +43,19 @@ data class PingConfig(
                 shizukuRetrySec = (p.getString("shizukuRetrySec", "2.0")?.toDoubleOrNull() ?: 2.0).coerceAtLeast(0.5),
                 maxLines = (p.getInt("maxLines", 100)).coerceAtLeast(20),
                 vpnPkg = p.getString("vpnPkg", "xyz.easypro.httpcustom") ?: "xyz.easypro.httpcustom",
-                execMode = p.getString("execMode", MODE_SHIZUKU) ?: MODE_SHIZUKU
+                execMode = p.getString("execMode", MODE_SHIZUKU) ?: MODE_SHIZUKU,
+                pauseOnWifi = p.getBoolean("pauseOnWifi", true),
+                compactLog = p.getBoolean("compactLog", false),
+                antiLoopLimit = (p.getInt("antiLoopLimit", 5)).coerceAtLeast(0),
+                antiLoopCooldownSec = (p.getString("antiLoopCooldownSec", "30.0")?.toDoubleOrNull() ?: 30.0).coerceAtLeast(1.0)
             )
         }
 
         fun save(context: Context, cfg: PingConfig) {
             context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
                 .putString("target", cfg.target.trim().ifEmpty { "dns.google" })
+                .putString("fallbackTarget", cfg.fallbackTarget.trim())
+                .putString("pingMode", cfg.pingMode)
                 .putString("intervalSec", cfg.intervalSec.coerceAtLeast(0.0).toString())
                 .putString("timeoutSec", cfg.timeoutSec.coerceAtLeast(0.5).toString())
                 .putInt("maxFail", cfg.maxFail.coerceAtLeast(1))
@@ -50,6 +66,10 @@ data class PingConfig(
                 .putInt("maxLines", cfg.maxLines.coerceAtLeast(20))
                 .putString("vpnPkg", cfg.vpnPkg.trim())
                 .putString("execMode", cfg.execMode)
+                .putBoolean("pauseOnWifi", cfg.pauseOnWifi)
+                .putBoolean("compactLog", cfg.compactLog)
+                .putInt("antiLoopLimit", cfg.antiLoopLimit.coerceAtLeast(0))
+                .putString("antiLoopCooldownSec", cfg.antiLoopCooldownSec.coerceAtLeast(1.0).toString())
                 .apply()
         }
     }

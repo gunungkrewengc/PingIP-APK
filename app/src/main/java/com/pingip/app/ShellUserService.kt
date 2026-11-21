@@ -17,12 +17,30 @@ class ShellUserService : IShellService.Stub() {
             val pb = ProcessBuilder("sh", "-c", command)
             pb.redirectErrorStream(true)
             val process = pb.start()
+            val outBuf = StringBuilder()
+            val readerThread = Thread {
+                try {
+                    process.inputStream.bufferedReader().use { br ->
+                        val buf = CharArray(2048)
+                        var n: Int
+                        while (br.read(buf).also { n = it } != -1) {
+                            if (outBuf.length < 32768) {
+                                outBuf.append(buf, 0, n)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            readerThread.start()
             val finished = process.waitFor(12, TimeUnit.SECONDS)
             if (!finished) {
                 process.destroyForcibly()
+                readerThread.join(500)
                 return "ERR:TIMEOUT"
             }
-            process.inputStream.bufferedReader().use { it.readText() }
+            readerThread.join(1000)
+            outBuf.toString()
         } catch (e: Exception) {
             "ERR:${e.message}"
         }

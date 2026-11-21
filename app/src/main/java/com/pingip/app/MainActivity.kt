@@ -1,14 +1,22 @@
 package com.pingip.app
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.os.SystemClock
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.RadioButton
 import android.widget.ScrollView
@@ -23,7 +31,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
@@ -39,12 +49,15 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var tvShizuku: TextView
+    private lateinit var tvStats: TextView
     private lateinit var tvSummary: TextView
     private lateinit var tvLogs: TextView
     private lateinit var scrollLogs: ScrollView
     private lateinit var btnToggle: Button
     private lateinit var btnSettings: Button
     private lateinit var btnShizukuPerm: Button
+    private lateinit var btnBatteryOpt: Button
+    private lateinit var btnCopyLog: Button
     private lateinit var btnClearLog: Button
 
     private val shizukuPermListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
@@ -73,12 +86,15 @@ class MainActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tvStatus)
         tvShizuku = findViewById(R.id.tvShizuku)
+        tvStats = findViewById(R.id.tvStats)
         tvSummary = findViewById(R.id.tvSummary)
         tvLogs = findViewById(R.id.tvLogs)
         scrollLogs = findViewById(R.id.scrollLogs)
         btnToggle = findViewById(R.id.btnToggle)
         btnSettings = findViewById(R.id.btnSettings)
         btnShizukuPerm = findViewById(R.id.btnShizukuPerm)
+        btnBatteryOpt = findViewById(R.id.btnBatteryOpt)
+        btnCopyLog = findViewById(R.id.btnCopyLog)
         btnClearLog = findViewById(R.id.btnClearLog)
 
         Shizuku.addRequestPermissionResultListener(shizukuPermListener)
@@ -105,29 +121,47 @@ class MainActivity : AppCompatActivity() {
 
         btnShizukuPerm.setOnClickListener { requestShizukuPermission() }
 
-        btnClearLog.setOnClickListener { PingStateStore.clearLogs() }
+        btnBatteryOpt.setOnClickListener { openBatteryOptSettings() }
 
+        btnCopyLog.setOnClickListener {
+            val text = PingStateStore.logs.value.joinToString("\n")
+            if (text.isBlank()) {
+                Toast.makeText(this, "Log masih kosong.", Toast.LENGTH_SHORT).show()
+            } else {
+                val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cb.setPrimaryClip(ClipData.newPlainText("PingIP Logs", text))
+                Toast.makeText(this, "Log disalin ke clipboard.", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnClearLog.setOnClickListener { PingStateStore.clearLogs() }
+    }
+
+    override fun onStart() {
+        super.onStart()
         refreshConfigSummary()
         refreshShizukuStatus()
+        refreshBatteryBanner()
         observeState()
     }
 
-    override fun onResume() {
-        super.onResume()
-        refreshShizukuStatus()
-        refreshConfigSummary()
+    override fun onStop() {
+        // Jeda pemantauan UI saat aplikasi di latar belakang agar nol beban RAM/CPU
+        collectJob?.cancel()
+        collectJob = null
+        super.onStop()
     }
 
     override fun onDestroy() {
         Shizuku.removeRequestPermissionResultListener(shizukuPermListener)
         Shizuku.removeBinderReceivedListener(binderReceivedListener)
         Shizuku.removeBinderDeadListener(binderDeadListener)
-        collectJob?.cancel()
         uiScope.cancel()
         super.onDestroy()
     }
 
     private fun observeState() {
+        collectJob?.cancel()
         collectJob = uiScope.launch {
             launch {
                 PingStateStore.isRunning.collectLatest { running ->
@@ -142,6 +176,7 @@ class MainActivity : AppCompatActivity() {
                             ContextCompat.getColor(this@MainActivity, R.color.accent_teal)
                         )
                     }
+                    renderStatsLine()
                 }
             }
             launch {
@@ -150,30 +185,83 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             launch {
+                PingStateStore.stats.collectLatest {
+                    renderStatsLine()
+                }
+            }
+            launch {
                 PingStateStore.logs.collectLatest { list ->
                     tvLogs.text = if (list.isEmpty()) {
-                        "Belum ada log. Pastikan Shizuku aktif & HTTP Custom konek, lalu tekan MULAI PINGIP."
+                        "Belum ada log. Pastikan Shizuku/Root siap & VPN konek, lalu tekan MULAI PINGIP."
                     } else {
                         list.joinToString("\n")
                     }
                     scrollLogs.post { scrollLogs.fullScroll(View.FOCUS_DOWN) }
                 }
             }
+            launch {
+                while (isActive) {
+                    if (PingStateStore.isRunning.value) {
+                        renderStatsLine()
+                    }
+                    delay(5000L)
+                }
+            }
         }
+    }
+
+    private fun renderStatsLine() {
+        val st = PingStateStore.stats.value
+        val running = PingStateStore.isRunning.value
+        val uptimeStr = if (running && st.startTimeMs > 0L) {
+            val sec = ((SystemClock.elapsedRealtime() - st.startTimeMs) / 1000L).coerceAtLeast(0L)
+            val h = sec / 3600
+            val m = (sec % 3600) / 60
+            val s = sec % 60
+            if (h > 0) "${h}j ${m}m" else if (m > 0) "${m}m ${s}d" else "${s}d"
+        } else {
+            "-"
+        }
+        tvStats.text = "Aktif: $uptimeStr  |  Mode Pesawat: ${st.toggleCount}x  |  Terakhir: ${st.lastToggleTime}"
     }
 
     private fun refreshConfigSummary() {
         val c = PingConfig.load(this)
         val vpnLabel = c.vpnPkg.ifEmpty { "Semua VPN" }
+        val antiLoop = if (c.antiLoopLimit > 0) "${c.antiLoopLimit}x/${c.antiLoopCooldownSec}s" else "OFF"
+        val logMode = if (c.compactLog) "Ringkas" else "Penuh"
+        val wifiLabel = if (c.pauseOnWifi) "Jeda Wi-Fi" else "Abai Wi-Fi"
         tvSummary.text =
-            "Mode: ${c.execMode.uppercase()} | ON-OFF: ${c.airplaneDelaySec}s | Cooldown: ${c.cooldownSec}s\n" +
-                "Ping: ${c.intervalSec}s | Timeout: ${c.timeoutSec}s (${c.maxFail}x) | Watcher: ${c.watcherIntervalSec}s | VPN: $vpnLabel"
+            "Mode: ${c.execMode.uppercase()} • ${c.pingMode.uppercase()} | ON-OFF: ${c.airplaneDelaySec}s | CD: ${c.cooldownSec}s\n" +
+                "Ping: ${c.intervalSec}s | TO: ${c.timeoutSec}s (${c.maxFail}x) | AntiLoop: $antiLoop | Log: $logMode\n" +
+                "$wifiLabel | Target: ${c.target} | VPN: $vpnLabel"
+    }
+
+    private fun refreshBatteryBanner() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val ignored = pm.isIgnoringBatteryOptimizations(packageName)
+        btnBatteryOpt.visibility = if (ignored) View.GONE else View.VISIBLE
+    }
+
+    private fun openBatteryOptSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) {
+                Toast.makeText(this, "Atur Baterai -> Tidak dibatasi di Pengaturan HP.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun refreshShizukuStatus() {
         val cfg = PingConfig.load(this)
         if (cfg.execMode == PingConfig.MODE_ROOT) {
-            tvShizuku.text = "Akses: Mode Root (su)"
+            tvShizuku.text = "Akses: Mode Root (su) • Watcher Native"
             btnShizukuPerm.visibility = View.GONE
             return
         }
@@ -191,7 +279,7 @@ class MainActivity : AppCompatActivity() {
             tvShizuku.text = "Shizuku: Versi terlalu lama"
             btnShizukuPerm.visibility = View.GONE
         } else if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-            tvShizuku.text = "Shizuku: Aktif & Terhubung"
+            tvShizuku.text = "Shizuku: Aktif & Terhubung • Watcher Native"
             btnShizukuPerm.visibility = View.GONE
         } else {
             tvShizuku.text = "Shizuku: Aktif, tapi belum diizinkan"
@@ -231,6 +319,10 @@ class MainActivity : AppCompatActivity() {
 
         val rbShizuku = view.findViewById<RadioButton>(R.id.rbShizuku)
         val rbRoot = view.findViewById<RadioButton>(R.id.rbRoot)
+        val rbHttps = view.findViewById<RadioButton>(R.id.rbHttps)
+        val rbTcp = view.findViewById<RadioButton>(R.id.rbTcp)
+        val cbPauseWifi = view.findViewById<CheckBox>(R.id.cbPauseWifi)
+        val cbCompactLog = view.findViewById<CheckBox>(R.id.cbCompactLog)
         val etAirplane = view.findViewById<EditText>(R.id.etAirplaneDelay)
         val etCooldown = view.findViewById<EditText>(R.id.etCooldown)
         val etInterval = view.findViewById<EditText>(R.id.etInterval)
@@ -238,11 +330,17 @@ class MainActivity : AppCompatActivity() {
         val etShizukuRetry = view.findViewById<EditText>(R.id.etShizukuRetry)
         val etTimeout = view.findViewById<EditText>(R.id.etTimeout)
         val etMaxFail = view.findViewById<EditText>(R.id.etMaxFail)
+        val etAntiLoopLimit = view.findViewById<EditText>(R.id.etAntiLoopLimit)
+        val etAntiLoopCooldown = view.findViewById<EditText>(R.id.etAntiLoopCooldown)
         val etMaxLines = view.findViewById<EditText>(R.id.etMaxLines)
         val etTarget = view.findViewById<EditText>(R.id.etTarget)
+        val etFallbackTarget = view.findViewById<EditText>(R.id.etFallbackTarget)
         val etVpnPkg = view.findViewById<EditText>(R.id.etVpnPkg)
 
         if (cfg.execMode == PingConfig.MODE_ROOT) rbRoot.isChecked = true else rbShizuku.isChecked = true
+        if (cfg.pingMode == PingConfig.PING_TCP) rbTcp.isChecked = true else rbHttps.isChecked = true
+        cbPauseWifi.isChecked = cfg.pauseOnWifi
+        cbCompactLog.isChecked = cfg.compactLog
         etAirplane.setText(cfg.airplaneDelaySec.toString())
         etCooldown.setText(cfg.cooldownSec.toString())
         etInterval.setText(cfg.intervalSec.toString())
@@ -250,16 +348,21 @@ class MainActivity : AppCompatActivity() {
         etShizukuRetry.setText(cfg.shizukuRetrySec.toString())
         etTimeout.setText(cfg.timeoutSec.toString())
         etMaxFail.setText(cfg.maxFail.toString())
+        etAntiLoopLimit.setText(cfg.antiLoopLimit.toString())
+        etAntiLoopCooldown.setText(cfg.antiLoopCooldownSec.toString())
         etMaxLines.setText(cfg.maxLines.toString())
         etTarget.setText(cfg.target)
+        etFallbackTarget.setText(cfg.fallbackTarget)
         etVpnPkg.setText(cfg.vpnPkg)
 
         AlertDialog.Builder(this)
-            .setTitle("Pengaturan PingIP v4.3")
+            .setTitle("Pengaturan PingIP v4.4")
             .setView(view)
             .setPositiveButton("Simpan") { _, _ ->
                 val updated = PingConfig(
                     target = etTarget.text.toString().trim().ifEmpty { "dns.google" },
+                    fallbackTarget = etFallbackTarget.text.toString().trim(),
+                    pingMode = if (rbTcp.isChecked) PingConfig.PING_TCP else PingConfig.PING_HTTPS,
                     intervalSec = (etInterval.text.toString().toDoubleOrNull() ?: cfg.intervalSec).coerceAtLeast(0.0),
                     timeoutSec = (etTimeout.text.toString().toDoubleOrNull() ?: cfg.timeoutSec).coerceAtLeast(0.5),
                     maxFail = (etMaxFail.text.toString().toIntOrNull() ?: cfg.maxFail).coerceAtLeast(1),
@@ -269,7 +372,11 @@ class MainActivity : AppCompatActivity() {
                     shizukuRetrySec = (etShizukuRetry.text.toString().toDoubleOrNull() ?: cfg.shizukuRetrySec).coerceAtLeast(0.5),
                     maxLines = (etMaxLines.text.toString().toIntOrNull() ?: cfg.maxLines).coerceAtLeast(20),
                     vpnPkg = etVpnPkg.text.toString().trim(),
-                    execMode = if (rbRoot.isChecked) PingConfig.MODE_ROOT else PingConfig.MODE_SHIZUKU
+                    execMode = if (rbRoot.isChecked) PingConfig.MODE_ROOT else PingConfig.MODE_SHIZUKU,
+                    pauseOnWifi = cbPauseWifi.isChecked,
+                    compactLog = cbCompactLog.isChecked,
+                    antiLoopLimit = (etAntiLoopLimit.text.toString().toIntOrNull() ?: cfg.antiLoopLimit).coerceAtLeast(0),
+                    antiLoopCooldownSec = (etAntiLoopCooldown.text.toString().toDoubleOrNull() ?: cfg.antiLoopCooldownSec).coerceAtLeast(1.0)
                 )
                 PingConfig.save(this, updated)
                 refreshConfigSummary()

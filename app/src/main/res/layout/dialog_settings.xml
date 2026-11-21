@@ -38,6 +38,45 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:text="Metode Cek Ping"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/rbHttps"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:text="HTTPS HEAD" />
+
+            <RadioButton
+                android:id="@+id/rbTcp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="TCP 443 (Ringan)" />
+        </RadioGroup>
+
+        <CheckBox
+            android:id="@+id/cbPauseWifi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Auto-Jeda saat terhubung ke Wi-Fi" />
+
+        <CheckBox
+            android:id="@+id/cbCompactLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="Mode Log Ringkas (hanya catat RTO/Jeda/Toggle)" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:text="Jeda ON-OFF Mode Pesawat (detik)" />
         <EditText
             android:id="@+id/etAirplaneDelay"
@@ -48,7 +87,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Cooldown setelah Mode Pesawat (detik)" />
+            android:text="Cooldown Normal setelah Mode Pesawat (detik)" />
         <EditText
             android:id="@+id/etCooldown"
             android:layout_width="match_parent"
@@ -61,26 +100,6 @@
             android:text="Interval Cek Ping (detik)" />
         <EditText
             android:id="@+id/etInterval"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:inputType="numberDecimal" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Kecepatan Watcher Data/VPN (detik, min 0.2)" />
-        <EditText
-            android:id="@+id/etWatcherInterval"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:inputType="numberDecimal" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Coba Ulang Shizuku di Awal (detik, min 0.5)" />
-        <EditText
-            android:id="@+id/etShizukuRetry"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="numberDecimal" />
@@ -108,6 +127,49 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Anti-Loop: Batas Toggle Beruntun Tanpa OK (0 = nonaktif)"
+            android:textStyle="bold" />
+        <EditText
+            android:id="@+id/etAntiLoopLimit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Anti-Loop: Cooldown Saat Melambat (detik)" />
+        <EditText
+            android:id="@+id/etAntiLoopCooldown"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="numberDecimal" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Kecepatan Watcher Native (detik, min 0.2)" />
+        <EditText
+            android:id="@+id/etWatcherInterval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="numberDecimal" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Coba Ulang Shizuku di Awal (detik, min 0.5)" />
+        <EditText
+            android:id="@+id/etShizukuRetry"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="numberDecimal" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:text="Batas Baris Log Layar" />
         <EditText
             android:id="@+id/etMaxLines"
@@ -118,11 +180,22 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Target Ping (default: dns.google)" />
+            android:text="Target Ping Utama (contoh: dns.google atau 1.1.1.1)" />
         <EditText
             android:id="@+id/etTarget"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:inputType="textUri" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Target Ping Cadangan (opsional, kosong = nonaktif)" />
+        <EditText
+            android:id="@+id/etFallbackTarget"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="contoh: 1.1.1.1"
             android:inputType="textUri" />
 
         <TextView
