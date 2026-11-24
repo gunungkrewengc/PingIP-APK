@@ -40,7 +40,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.HttpsURLConnection
 
 class PingService : Service() {
 
@@ -95,7 +94,7 @@ class PingService : Service() {
     private var workerThread: Thread? = null
 
     private val pingExecutor = ThreadPoolExecutor(
-        2, 4, 30L, TimeUnit.SECONDS, SynchronousQueue(),
+        1, 6, 30L, TimeUnit.SECONDS, SynchronousQueue(),
         { r -> Thread(r, "PingIP-Net").apply { isDaemon = true } }
     ).apply { allowCoreThreadTimeOut(true) }
 
@@ -133,6 +132,10 @@ class PingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        try {
+            System.setProperty("http.keepAlive", "true")
+            System.setProperty("http.maxConnections", "4")
+        } catch (_: Throwable) {}
         createNotificationChannel()
         cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         registerNetWatcher()
@@ -218,7 +221,7 @@ class PingService : Service() {
             try { acquire() } catch (_: Throwable) {}
         }
 
-        val notif = buildNotification("Memulai PingIP v4.6...")
+        val notif = buildNotification("Memulai PingIP v4.6.1...")
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -226,7 +229,7 @@ class PingService : Service() {
         }
 
         PingTileService.requestSync(this)
-        addLog("=== PingIP v4.6 Ultra-Slim Dimulai ===")
+        addLog("=== PingIP v4.6.1 Ultra-Slim Dimulai ===")
         addLog("Mode: ${config.execMode.uppercase(Locale.US)} | Ping: ${methodDisplayName(config.pingMethod)} | Target: ${config.targetPrimary}")
         setStatus("Menyiapkan layanan...", forceNotif = true)
 
@@ -480,27 +483,7 @@ class PingService : Service() {
             clean.contains("/") -> "http://$clean"
             else -> "http://$clean/generate_204"
         }
-        var conn: HttpURLConnection? = null
-        return try {
-            conn = (URL(clean).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                instanceFollowRedirects = false
-                useCaches = false
-                connectTimeout = timeoutMs
-                readTimeout = timeoutMs
-                setRequestProperty("Connection", "close")
-                setRequestProperty("Cache-Control", "no-cache")
-            }
-            connRef.set(conn)
-            val code = conn.responseCode
-            try { conn.inputStream?.close() } catch (_: Throwable) {}
-            if (code == 204) (SystemClock.elapsedRealtime() - t0).coerceAtLeast(1L) else -1L
-        } catch (_: Throwable) {
-            -1L
-        } finally {
-            try { conn?.disconnect() } catch (_: Throwable) {}
-            connRef.set(null)
-        }
+        return executeKeepAliveHttp(clean, "GET", timeoutMs, connRef, t0) { code -> code == 204 }
     }
 
     private fun doHttpsHead(rawTarget: String, timeoutMs: Int, connRef: AtomicReference<HttpURLConnection?>, t0: Long): Long {
@@ -511,27 +494,69 @@ class PingService : Service() {
                 else -> "https://$it"
             }
         }
-        var conn: HttpsURLConnection? = null
-        return try {
-            conn = (URL(clean).openConnection() as HttpsURLConnection).apply {
-                requestMethod = "HEAD"
-                instanceFollowRedirects = false
-                useCaches = false
-                connectTimeout = timeoutMs
-                readTimeout = timeoutMs
-                setRequestProperty("Connection", "close")
-                setRequestProperty("Cache-Control", "no-cache")
+        return executeKeepAliveHttp(clean, "HEAD", timeoutMs, connRef, t0) { code -> code in 200..399 }
+    }
+
+    private fun executeKeepAliveHttp(
+        urlStr: String,
+        httpMethod: String,
+        timeoutMs: Int,
+        connRef: AtomicReference<HttpURLConnection?>,
+        t0: Long,
+        isValidCode: (Int) -> Boolean
+    ): Long {
+        val url = try { URL(urlStr) } catch (_: Throwable) { return -1L }
+        for (attempt in 0..1) {
+            val elapsedBefore = SystemClock.elapsedRealtime() - t0
+            val remMs = (timeoutMs - elapsedBefore).toInt()
+            if (remMs < 150) return -1L
+
+            var conn: HttpURLConnection? = null
+            var keepAliveSafe = false
+            try {
+                conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = httpMethod
+                    instanceFollowRedirects = false
+                    useCaches = false
+                    connectTimeout = remMs
+                    readTimeout = remMs
+                    setRequestProperty("Connection", "keep-alive")
+                    setRequestProperty("Cache-Control", "no-cache")
+                }
+                connRef.set(conn)
+                val code = conn.responseCode
+                val stream = try {
+                    if (code in 200..399) conn.inputStream else conn.errorStream
+                } catch (_: Throwable) { null }
+                if (stream != null) {
+                    stream.use { s ->
+                        val buf = ByteArray(256)
+                        while (s.read(buf) != -1) {
+                            // Drain empty/tiny body so socket returns cleanly to Keep-Alive pool
+                        }
+                    }
+                }
+                if (isValidCode(code)) {
+                    keepAliveSafe = true
+                    return (SystemClock.elapsedRealtime() - t0).coerceAtLeast(1L)
+                } else {
+                    return -1L
+                }
+            } catch (_: Throwable) {
+                try { conn?.disconnect() } catch (_: Throwable) {}
+                val fastFail = (SystemClock.elapsedRealtime() - t0) < (timeoutMs / 2)
+                if (attempt == 0 && fastFail && runningFlag.get() && !Thread.currentThread().isInterrupted) {
+                    continue
+                }
+                return -1L
+            } finally {
+                if (!keepAliveSafe) {
+                    try { conn?.disconnect() } catch (_: Throwable) {}
+                }
+                connRef.set(null)
             }
-            connRef.set(conn)
-            val code = conn.responseCode
-            try { conn.inputStream?.close() } catch (_: Throwable) {}
-            if (code in 200..399) (SystemClock.elapsedRealtime() - t0).coerceAtLeast(1L) else -1L
-        } catch (_: Throwable) {
-            -1L
-        } finally {
-            try { conn?.disconnect() } catch (_: Throwable) {}
-            connRef.set(null)
         }
+        return -1L
     }
 
     private fun doTcpConnect(rawTarget: String, timeoutMs: Int, sockRef: AtomicReference<Socket?>, t0: Long): Long {
@@ -684,7 +709,7 @@ class PingService : Service() {
                 .daemon(false)
                 .processNameSuffix("shizuku_shell")
                 .debuggable(false)
-                .version(46)
+                .version(47)
             shizukuArgs = args
             Shizuku.bindUserService(args, shizukuConn)
             latch.await(3500L, TimeUnit.MILLISECONDS)
@@ -798,7 +823,7 @@ class PingService : Service() {
         val noIcon: Icon? = null
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tile)
-            .setContentTitle("PingIP v4.6 • Toggle: ${toggleCount}x")
+            .setContentTitle("PingIP v4.6.1 • Toggle: ${toggleCount}x")
             .setContentText(statusText)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

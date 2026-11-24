@@ -130,7 +130,7 @@ class MainActivity : Activity(), PingService.UiListener {
             gravity = Gravity.CENTER_VERTICAL
         }
         val title = TextView(this).apply {
-            text = "PingIP v4.6"
+            text = "PingIP v4.6.1"
             setTextColor(Color.parseColor("#F8FAFC"))
             textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
@@ -410,10 +410,10 @@ class MainActivity : Activity(), PingService.UiListener {
         rgMode.check(if (cfg.execMode == PingConfig.MODE_SHIZUKU) rbShizuku.id else rbRoot.id)
         box.addView(rgMode)
 
-        addSectionLabel("Metode Cek Ping")
+        addSectionLabel("Metode Cek Ping (Keep-Alive Aktif)")
         val rgPing = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
-        val rbHttp204 = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "HTTP 204 (Cepat, ms Kecil, Anti-OK Palsu)" })
-        val rbHttps = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "HTTPS HEAD (Akurat)" })
+        val rbHttp204 = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "HTTP 204 (Tercepat, ms Kecil, Anti-OK Palsu)" })
+        val rbHttps = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "HTTPS HEAD (Akurat, Keep-Alive)" })
         val rbTcp = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "TCP 443" })
         rgPing.addView(rbHttp204)
         rgPing.addView(rbHttps)
@@ -458,7 +458,7 @@ class MainActivity : Activity(), PingService.UiListener {
         val etWatcher = makeEdit("Kecepatan Watcher Native (detik, min 0.2)", cfg.watcherSec.toString(), "0.5", numDec)
         val etShizukuRetry = makeEdit("Coba Ulang Shizuku di Awal (detik, min 0.5)", cfg.shizukuRetrySec.toString(), "2.0", numDec)
         val etMaxLog = makeEdit("Batas Baris Log Layar", cfg.maxLogLines.toString(), "100", numInt)
-        val etPrimary = makeEdit("Target Ping Utama", cfg.targetPrimary, "dns.google / cp.cloudflare.com/generate_204", txt)
+        val etPrimary = makeEdit("Target Ping Utama", cfg.targetPrimary, "cp.cloudflare.com/generate_204 / 1.1.1.1", txt)
         val etBackup = makeEdit("Target Ping Cadangan (opsional, kosong = nonaktif)", cfg.targetBackup, "contoh: connectivitycheck.gstatic.com/generate_204", txt)
         val etVpnFilter = makeEdit("Filter Paket VPN (kosongkan = semua VPN, bisa koma)", cfg.vpnPackageFilter, "xyz.easypro.httpcustom", txt)
 
@@ -470,7 +470,7 @@ class MainActivity : Activity(), PingService.UiListener {
                 }
             } else {
                 if (cur.contains("generate_204", true) || cur.contains("cp.cloudflare.com", true) || cur.contains("gstatic.com", true)) {
-                    etPrimary.setText("dns.google")
+                    etPrimary.setText("1.1.1.1")
                 }
             }
         }
@@ -478,7 +478,7 @@ class MainActivity : Activity(), PingService.UiListener {
         scroll.addView(box)
 
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Pengaturan PingIP v4.6")
+            .setTitle("Pengaturan PingIP v4.6.1")
             .setView(scroll)
             .setNegativeButton("BATAL", null)
             .setPositiveButton("SIMPAN") { _, _ ->
@@ -501,7 +501,7 @@ class MainActivity : Activity(), PingService.UiListener {
                     watcherSec = etWatcher.text.toString().toDoubleOrNull() ?: cfg.watcherSec,
                     shizukuRetrySec = etShizukuRetry.text.toString().toDoubleOrNull() ?: cfg.shizukuRetrySec,
                     maxLogLines = etMaxLog.text.toString().toIntOrNull() ?: cfg.maxLogLines,
-                    targetPrimary = etPrimary.text.toString().trim().ifEmpty { "dns.google" },
+                    targetPrimary = etPrimary.text.toString().trim().ifEmpty { "cp.cloudflare.com/generate_204" },
                     targetBackup = etBackup.text.toString().trim(),
                     vpnPackageFilter = etVpnFilter.text.toString().trim()
                 )

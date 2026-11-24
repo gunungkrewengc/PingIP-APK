@@ -4,7 +4,7 @@ import android.content.Context
 
 data class PingConfig(
     val execMode: String = MODE_ROOT,
-    val pingMethod: String = PING_HTTPS_HEAD,
+    val pingMethod: String = PING_HTTP_204,
     val pauseOnWifi: Boolean = true,
     val compactLog: Boolean = false,
     val airplaneDelaySec: Double = 0.0,
@@ -17,7 +17,7 @@ data class PingConfig(
     val watcherSec: Double = 0.5,
     val shizukuRetrySec: Double = 2.0,
     val maxLogLines: Int = 100,
-    val targetPrimary: String = "dns.google",
+    val targetPrimary: String = "cp.cloudflare.com/generate_204",
     val targetBackup: String = "",
     val vpnPackageFilter: String = "xyz.easypro.httpcustom"
 ) {
@@ -34,7 +34,7 @@ data class PingConfig(
             val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             return PingConfig(
                 execMode = p.getString("exec_mode", MODE_ROOT) ?: MODE_ROOT,
-                pingMethod = p.getString("ping_method", PING_HTTPS_HEAD) ?: PING_HTTPS_HEAD,
+                pingMethod = p.getString("ping_method", PING_HTTP_204) ?: PING_HTTP_204,
                 pauseOnWifi = p.getBoolean("pause_on_wifi", true),
                 compactLog = p.getBoolean("compact_log", false),
                 airplaneDelaySec = p.getFloat("airplane_delay_sec", 0.0f).toDouble().coerceIn(0.0, 30.0),
@@ -47,9 +47,11 @@ data class PingConfig(
                 watcherSec = p.getFloat("watcher_sec", 0.5f).toDouble().coerceIn(0.2, 10.0),
                 shizukuRetrySec = p.getFloat("shizuku_retry_sec", 2.0f).toDouble().coerceIn(0.5, 15.0),
                 maxLogLines = p.getInt("max_log_lines", 100).coerceIn(20, 500),
-                targetPrimary = (p.getString("target_primary", "dns.google") ?: "dns.google").trim().ifEmpty { "dns.google" },
+                targetPrimary = (p.getString("target_primary", "cp.cloudflare.com/generate_204")
+                    ?: "cp.cloudflare.com/generate_204").trim().ifEmpty { "cp.cloudflare.com/generate_204" },
                 targetBackup = (p.getString("target_backup", "") ?: "").trim(),
-                vpnPackageFilter = (p.getString("vpn_package_filter", "xyz.easypro.httpcustom") ?: "xyz.easypro.httpcustom").trim()
+                vpnPackageFilter = (p.getString("vpn_package_filter", "xyz.easypro.httpcustom")
+                    ?: "xyz.easypro.httpcustom").trim()
             )
         }
 
@@ -69,7 +71,7 @@ data class PingConfig(
                 .putFloat("watcher_sec", cfg.watcherSec.coerceIn(0.2, 10.0).toFloat())
                 .putFloat("shizuku_retry_sec", cfg.shizukuRetrySec.coerceIn(0.5, 15.0).toFloat())
                 .putInt("max_log_lines", cfg.maxLogLines.coerceIn(20, 500))
-                .putString("target_primary", cfg.targetPrimary.trim().ifEmpty { "dns.google" })
+                .putString("target_primary", cfg.targetPrimary.trim().ifEmpty { "cp.cloudflare.com/generate_204" })
                 .putString("target_backup", cfg.targetBackup.trim())
                 .putString("vpn_package_filter", cfg.vpnPackageFilter.trim())
                 .apply()
