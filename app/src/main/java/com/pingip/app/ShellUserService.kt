@@ -1,48 +1,54 @@
 package com.pingip.app
 
-import androidx.annotation.Keep
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
-import kotlin.system.exitProcess
 
-@Keep
 class ShellUserService : IShellService.Stub() {
 
     override fun destroy() {
-        exitProcess(0)
+        System.exit(0)
+    }
+
+    override fun exit() {
+        System.exit(0)
     }
 
     override fun exec(command: String?): String {
         if (command.isNullOrBlank()) return ""
+        var process: Process? = null
         return try {
-            val pb = ProcessBuilder("sh", "-c", command)
-            pb.redirectErrorStream(true)
-            val process = pb.start()
-            val outBuf = StringBuilder()
+            val proc = ProcessBuilder("sh", "-c", command)
+                .redirectErrorStream(true)
+                .start()
+            process = proc
+            val sb = StringBuilder()
             val readerThread = Thread {
                 try {
-                    process.inputStream.bufferedReader().use { br ->
-                        val buf = CharArray(2048)
-                        var n: Int
-                        while (br.read(buf).also { n = it } != -1) {
-                            if (outBuf.length < 32768) {
-                                outBuf.append(buf, 0, n)
+                    BufferedReader(InputStreamReader(proc.inputStream)).use { br ->
+                        var line: String?
+                        while (br.readLine().also { line = it } != null) {
+                            if (sb.length < 8192) {
+                                sb.append(line).append('\n')
                             }
                         }
                     }
-                } catch (_: Exception) {
-                }
+                } catch (_: Throwable) {}
+            }.apply {
+                isDaemon = true
+                start()
             }
-            readerThread.start()
-            val finished = process.waitFor(12, TimeUnit.SECONDS)
+            val finished = proc.waitFor(15, TimeUnit.SECONDS)
             if (!finished) {
-                process.destroyForcibly()
-                readerThread.join(500)
+                proc.destroyForcibly()
                 return "ERR:TIMEOUT"
             }
             readerThread.join(1000)
-            outBuf.toString()
-        } catch (e: Exception) {
-            "ERR:${e.message}"
+            sb.toString().trim()
+        } catch (t: Throwable) {
+            "ERR:${t.message ?: "exec"}"
+        } finally {
+            try { process?.destroy() } catch (_: Throwable) {}
         }
     }
 }

@@ -1,4 +1,4 @@
-name: Build PingIP APK
+name: Build PingIP v4.6 Ultra-Slim APK
 
 on:
   push:
@@ -8,39 +8,33 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout kode
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Siapkan JDK 17
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '17'
-          distribution: 'temurin'
 
-      - name: Setup Gradle 8.7
+      - name: Siapkan Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Accept Android SDK Licenses
+      - name: Build APK Release (R8 Ultra-Slim)
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Siapkan file APK
         run: |
-          if [ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]; then
-            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          fi
+          mkdir -p out
+          APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          cp "$APK_FILE" out/PingIP-v4.6-UltraSlim.apk
+          ls -lh out/PingIP-v4.6-UltraSlim.apk
 
-      - name: Build Optimized Release APK (R8 Shrunk)
-        run: gradle assembleRelease --no-daemon
-
-      - name: Rename APK & Show Size
-        run: |
-          mkdir -p release-apk
-          cp app/build/outputs/apk/release/app-release.apk release-apk/PingIP-v4.5.apk
-          ls -lh release-apk/PingIP-v4.5.apk
-
-      - name: Upload APK Artifact
+      - name: Upload APK ke Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: PingIP-v4.5-APK
-          path: release-apk/PingIP-v4.5.apk
+          name: PingIP-v4.6-UltraSlim-APK
+          path: out/PingIP-v4.6-UltraSlim.apk

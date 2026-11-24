@@ -9,17 +9,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <queries>
-        <package android:name="moe.shizuku.privileged.api" />
-    </queries>
-
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:icon="@drawable/ic_launcher"
         android:label="PingIP"
         android:supportsRtl="true"
-        android:theme="@style/Theme.PingIP">
+        android:theme="@style/Theme.PingIP"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
@@ -33,17 +29,18 @@
 
         <service
             android:name=".PingService"
+            android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Network ping monitor and automated airplane mode recovery via Shizuku or Root" />
+                android:value="Pemantau koneksi internet dan penyegar IP otomatis" />
         </service>
 
         <service
             android:name=".PingTileService"
             android:exported="true"
-            android:icon="@drawable/ic_notif"
+            android:icon="@drawable/ic_tile"
             android:label="PingIP"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
@@ -51,12 +48,5 @@
             </intent-filter>
         </service>
 
-        <provider
-            android:name="rikka.shizuku.ShizukuProvider"
-            android:authorities="${applicationId}.shizuku"
-            android:multiprocess="false"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 </manifest>

@@ -3,73 +3,75 @@ package com.pingip.app
 import android.content.Context
 
 data class PingConfig(
-    val target: String = "1.1.1.1",
-    val fallbackTarget: String = "",
-    val pingMode: String = PING_HTTPS,
-    val intervalSec: Double = 1.0,
-    val timeoutSec: Double = 1.0,
-    val maxFail: Int = 2,
-    val airplaneDelaySec: Double = 0.5,
-    val cooldownSec: Double = 8.0,
-    val watcherIntervalSec: Double = 0.5,
-    val shizukuRetrySec: Double = 2.0,
-    val maxLines: Int = 100,
-    val vpnPkg: String = "xyz.easypro.httpcustom",
-    val execMode: String = MODE_SHIZUKU,
+    val execMode: String = MODE_ROOT,
+    val pingMethod: String = PING_HTTPS_HEAD,
     val pauseOnWifi: Boolean = true,
     val compactLog: Boolean = false,
-    val antiLoopLimit: Int = 5,
-    val antiLoopCooldownSec: Double = 30.0
+    val airplaneDelaySec: Double = 0.0,
+    val cooldownSec: Double = 8.0,
+    val intervalSec: Double = 1.0,
+    val timeoutSec: Double = 1.0,
+    val failThreshold: Int = 2,
+    val antiLoopLimit: Int = 10,
+    val antiLoopCooldownSec: Double = 30.0,
+    val watcherSec: Double = 0.5,
+    val shizukuRetrySec: Double = 2.0,
+    val maxLogLines: Int = 100,
+    val targetPrimary: String = "dns.google",
+    val targetBackup: String = "",
+    val vpnPackageFilter: String = "xyz.easypro.httpcustom"
 ) {
     companion object {
-        const val MODE_SHIZUKU = "shizuku"
+        const val PREFS = "pingip_v4_prefs"
         const val MODE_ROOT = "root"
-        const val PING_HTTPS = "https"
-        const val PING_TCP = "tcp"
-        private const val PREF_NAME = "pingip_prefs"
+        const val MODE_SHIZUKU = "shizuku"
+
+        const val PING_HTTP_204 = "http_204"
+        const val PING_HTTPS_HEAD = "https_head"
+        const val PING_TCP_443 = "tcp_443"
 
         fun load(context: Context): PingConfig {
-            val p = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             return PingConfig(
-                target = p.getString("target", "1.1.1.1") ?: "1.1.1.1",
-                fallbackTarget = p.getString("fallbackTarget", "") ?: "",
-                pingMode = p.getString("pingMode", PING_HTTPS) ?: PING_HTTPS,
-                intervalSec = (p.getString("intervalSec", "1.0")?.toDoubleOrNull() ?: 1.0).coerceAtLeast(0.0),
-                timeoutSec = (p.getString("timeoutSec", "1.0")?.toDoubleOrNull() ?: 1.0).coerceAtLeast(0.5),
-                maxFail = (p.getInt("maxFail", 2)).coerceAtLeast(1),
-                airplaneDelaySec = (p.getString("airplaneDelaySec", "0.5")?.toDoubleOrNull() ?: 0.5).coerceAtLeast(0.0),
-                cooldownSec = (p.getString("cooldownSec", "8.0")?.toDoubleOrNull() ?: 8.0).coerceAtLeast(0.0),
-                watcherIntervalSec = (p.getString("watcherIntervalSec", "0.5")?.toDoubleOrNull() ?: 0.5).coerceAtLeast(0.2),
-                shizukuRetrySec = (p.getString("shizukuRetrySec", "2.0")?.toDoubleOrNull() ?: 2.0).coerceAtLeast(0.5),
-                maxLines = (p.getInt("maxLines", 100)).coerceAtLeast(20),
-                vpnPkg = p.getString("vpnPkg", "xyz.easypro.httpcustom") ?: "xyz.easypro.httpcustom",
-                execMode = p.getString("execMode", MODE_SHIZUKU) ?: MODE_SHIZUKU,
-                pauseOnWifi = p.getBoolean("pauseOnWifi", true),
-                compactLog = p.getBoolean("compactLog", false),
-                antiLoopLimit = (p.getInt("antiLoopLimit", 5)).coerceAtLeast(0),
-                antiLoopCooldownSec = (p.getString("antiLoopCooldownSec", "30.0")?.toDoubleOrNull() ?: 30.0).coerceAtLeast(1.0)
+                execMode = p.getString("exec_mode", MODE_ROOT) ?: MODE_ROOT,
+                pingMethod = p.getString("ping_method", PING_HTTPS_HEAD) ?: PING_HTTPS_HEAD,
+                pauseOnWifi = p.getBoolean("pause_on_wifi", true),
+                compactLog = p.getBoolean("compact_log", false),
+                airplaneDelaySec = p.getFloat("airplane_delay_sec", 0.0f).toDouble().coerceIn(0.0, 30.0),
+                cooldownSec = p.getFloat("cooldown_sec", 8.0f).toDouble().coerceIn(0.5, 120.0),
+                intervalSec = p.getFloat("interval_sec", 1.0f).toDouble().coerceIn(0.2, 60.0),
+                timeoutSec = p.getFloat("timeout_sec", 1.0f).toDouble().coerceIn(0.3, 15.0),
+                failThreshold = p.getInt("fail_threshold", 2).coerceIn(1, 20),
+                antiLoopLimit = p.getInt("anti_loop_limit", 10).coerceIn(0, 100),
+                antiLoopCooldownSec = p.getFloat("anti_loop_cooldown_sec", 30.0f).toDouble().coerceIn(2.0, 300.0),
+                watcherSec = p.getFloat("watcher_sec", 0.5f).toDouble().coerceIn(0.2, 10.0),
+                shizukuRetrySec = p.getFloat("shizuku_retry_sec", 2.0f).toDouble().coerceIn(0.5, 15.0),
+                maxLogLines = p.getInt("max_log_lines", 100).coerceIn(20, 500),
+                targetPrimary = (p.getString("target_primary", "dns.google") ?: "dns.google").trim().ifEmpty { "dns.google" },
+                targetBackup = (p.getString("target_backup", "") ?: "").trim(),
+                vpnPackageFilter = (p.getString("vpn_package_filter", "xyz.easypro.httpcustom") ?: "xyz.easypro.httpcustom").trim()
             )
         }
 
         fun save(context: Context, cfg: PingConfig) {
-            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
-                .putString("target", cfg.target.trim().ifEmpty { "1.1.1.1" })
-                .putString("fallbackTarget", cfg.fallbackTarget.trim())
-                .putString("pingMode", cfg.pingMode)
-                .putString("intervalSec", cfg.intervalSec.coerceAtLeast(0.0).toString())
-                .putString("timeoutSec", cfg.timeoutSec.coerceAtLeast(0.5).toString())
-                .putInt("maxFail", cfg.maxFail.coerceAtLeast(1))
-                .putString("airplaneDelaySec", cfg.airplaneDelaySec.coerceAtLeast(0.0).toString())
-                .putString("cooldownSec", cfg.cooldownSec.coerceAtLeast(0.0).toString())
-                .putString("watcherIntervalSec", cfg.watcherIntervalSec.coerceAtLeast(0.2).toString())
-                .putString("shizukuRetrySec", cfg.shizukuRetrySec.coerceAtLeast(0.5).toString())
-                .putInt("maxLines", cfg.maxLines.coerceAtLeast(20))
-                .putString("vpnPkg", cfg.vpnPkg.trim())
-                .putString("execMode", cfg.execMode)
-                .putBoolean("pauseOnWifi", cfg.pauseOnWifi)
-                .putBoolean("compactLog", cfg.compactLog)
-                .putInt("antiLoopLimit", cfg.antiLoopLimit.coerceAtLeast(0))
-                .putString("antiLoopCooldownSec", cfg.antiLoopCooldownSec.coerceAtLeast(1.0).toString())
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString("exec_mode", cfg.execMode)
+                .putString("ping_method", cfg.pingMethod)
+                .putBoolean("pause_on_wifi", cfg.pauseOnWifi)
+                .putBoolean("compact_log", cfg.compactLog)
+                .putFloat("airplane_delay_sec", cfg.airplaneDelaySec.coerceIn(0.0, 30.0).toFloat())
+                .putFloat("cooldown_sec", cfg.cooldownSec.coerceIn(0.5, 120.0).toFloat())
+                .putFloat("interval_sec", cfg.intervalSec.coerceIn(0.2, 60.0).toFloat())
+                .putFloat("timeout_sec", cfg.timeoutSec.coerceIn(0.3, 15.0).toFloat())
+                .putInt("fail_threshold", cfg.failThreshold.coerceIn(1, 20))
+                .putInt("anti_loop_limit", cfg.antiLoopLimit.coerceIn(0, 100))
+                .putFloat("anti_loop_cooldown_sec", cfg.antiLoopCooldownSec.coerceIn(2.0, 300.0).toFloat())
+                .putFloat("watcher_sec", cfg.watcherSec.coerceIn(0.2, 10.0).toFloat())
+                .putFloat("shizuku_retry_sec", cfg.shizukuRetrySec.coerceIn(0.5, 15.0).toFloat())
+                .putInt("max_log_lines", cfg.maxLogLines.coerceIn(20, 500))
+                .putString("target_primary", cfg.targetPrimary.trim().ifEmpty { "dns.google" })
+                .putString("target_backup", cfg.targetBackup.trim())
+                .putString("vpn_package_filter", cfg.vpnPackageFilter.trim())
                 .apply()
         }
     }
