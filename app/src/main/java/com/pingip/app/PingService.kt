@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -25,6 +26,8 @@ import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import rikka.shizuku.Shizuku
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
@@ -55,13 +58,15 @@ class PingService : Service() {
         const val ACTION_RELOAD_CONFIG = "com.pingip.app.RELOAD_CONFIG"
         const val ACTION_CLEAR_LOG = "com.pingip.app.CLEAR_LOG"
 
-        private const val CHANNEL_ID = "pingip_v46_channel"
-        private const val NOTIF_ID = 4601
+        private const val CHANNEL_ID = "pingip_v47_channel"
+        private const val NOTIF_ID = 4701
         private val TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
         @Volatile var isRunning: Boolean = false
         @Volatile var isManuallyPaused: Boolean = false
         @Volatile var currentStatus: String = "Berhenti"
+        @Volatile var currentCellIp: String = "-"
+        @Volatile var cellLinkGeneration: Int = 0
         @Volatile var startTimeElapsed: Long = 0L
         @Volatile var toggleCount: Int = 0
         @Volatile var lastToggleTime: String = "-"
@@ -82,6 +87,42 @@ class PingService : Service() {
         fun clearLogsInternal() {
             synchronized(logLock) { logBuffer.clear() }
             uiListener?.onStateUpdated()
+        }
+
+        @Suppress("DEPRECATION")
+        fun refreshStaticCellIp(context: Context) {
+            try {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+                var found: String? = null
+                for (net in cm.allNetworks) {
+                    val caps = cm.getNetworkCapabilities(net) ?: continue
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+                        !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    ) {
+                        val ip = extractBestIp(cm.getLinkProperties(net))
+                        if (ip != null) found = ip
+                    }
+                }
+                currentCellIp = found ?: "-"
+            } catch (_: Throwable) {}
+        }
+
+        fun extractBestIp(lp: LinkProperties?): String? {
+            if (lp == null) return null
+            val addrs = lp.linkAddresses ?: return null
+            for (la in addrs) {
+                val a = la.address
+                if (a is Inet4Address && !a.isLoopbackAddress && !a.isLinkLocalAddress) {
+                    return a.hostAddress
+                }
+            }
+            for (la in addrs) {
+                val a = la.address
+                if (a is Inet6Address && !a.isLoopbackAddress && !a.isLinkLocalAddress) {
+                    return a.hostAddress?.substringBefore('%')
+                }
+            }
+            return null
         }
     }
 
@@ -122,6 +163,7 @@ class PingService : Service() {
     private var cm: ConnectivityManager? = null
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     private val activeCaps = ConcurrentHashMap<Network, NetworkCapabilities>()
+    private val activeLinks = ConcurrentHashMap<Network, LinkProperties>()
     @Volatile private var isWifiActive = false
     @Volatile private var isVpnActive = false
     @Volatile private var vpnFilterChecked = false
@@ -181,14 +223,19 @@ class PingService : Service() {
                 trimLogs(newCfg.maxLogLines)
                 if (isRunning) {
                     if (oldCfg.execMode != newCfg.execMode) {
-                        addLog("CONFIG: Ganti mode -> ${newCfg.execMode.uppercase(Locale.US)}")
+                        addLog("CONFIG: Ganti mode -> ${modeDisplayName(newCfg.execMode)}")
                         if (oldCfg.execMode == PingConfig.MODE_ROOT) rootShell.close()
                         if (oldCfg.execMode == PingConfig.MODE_SHIZUKU) unbindShizuku()
                     }
                     if (oldCfg.vpnPackageFilter != newCfg.vpnPackageFilter) {
                         vpnFilterChecked = false
                     }
-                    addLog("CONFIG: Hot-Reload (${methodDisplayName(newCfg.pingMethod)} | ${newCfg.targetPrimary} | ${newCfg.intervalSec}s)")
+                    val postDesc = if (newCfg.postToggleMode == PingConfig.POST_IP_CHANGE) {
+                        "Tunggu IP (+${newCfg.ipStabilizeSec}s)"
+                    } else {
+                        "Cooldown ${newCfg.cooldownSec}s"
+                    }
+                    addLog("CONFIG: Hot-Reload (${methodDisplayName(newCfg.pingMethod)} | $postDesc)")
                     wakeWorker()
                     notifyUi()
                 }
@@ -221,7 +268,7 @@ class PingService : Service() {
             try { acquire() } catch (_: Throwable) {}
         }
 
-        val notif = buildNotification("Memulai PingIP v4.6.1...")
+        val notif = buildNotification("Memulai PingIP v4.7...")
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -229,8 +276,8 @@ class PingService : Service() {
         }
 
         PingTileService.requestSync(this)
-        addLog("=== PingIP v4.6.1 Ultra-Slim Dimulai ===")
-        addLog("Mode: ${config.execMode.uppercase(Locale.US)} | Ping: ${methodDisplayName(config.pingMethod)} | Target: ${config.targetPrimary}")
+        addLog("=== PingIP v4.7 Ultra-Slim Dimulai ===")
+        addLog("Mode: ${modeDisplayName(config.execMode)} | Ping: ${methodDisplayName(config.pingMethod)} | IP Awal: $currentCellIp")
         setStatus("Menyiapkan layanan...", forceNotif = true)
 
         workerThread = Thread({ runMonitorLoop() }, "PingIP-Worker").apply {
@@ -249,14 +296,18 @@ class PingService : Service() {
 
             if (manualResetRequested.getAndSet(false)) {
                 if (ensureShellReady(cfg)) {
-                    addLog("[MANUAL] Menjalankan Mode Pesawat (${cfg.airplaneDelaySec}s)...")
+                    val oldIp = currentCellIp
+                    val startGen = cellLinkGeneration
+                    addLog("[MANUAL] Mode Pesawat (${cfg.airplaneDelaySec}s) | IP Lama: $oldIp")
                     setStatus("Mode Pesawat (Manual)...", forceNotif = true)
-                    executeAirplaneToggle(cfg)
+                    val ok = executeAirplaneToggle(cfg)
                     failCount = 0
                     consecutiveToggles = 0
-                    waitCooldown(cfg.cooldownSec, "Cooldown setelah Reset Manual")
+                    if (ok) {
+                        waitAfterAirplaneToggle(cfg, oldIp, startGen, isAntiLoop = false, consecutiveToggles = 0)
+                    }
                 } else {
-                    addLog("ERROR: Akses ${cfg.execMode} tidak siap untuk Reset IP")
+                    addLog("ERROR: Akses ${modeDisplayName(cfg.execMode)} tidak siap untuk Reset IP")
                 }
                 continue
             }
@@ -305,12 +356,15 @@ class PingService : Service() {
                     interruptibleSleep((cfg.watcherSec * 1000.0).toLong())
                     continue
                 }
-                if (!vpnFilterChecked) {
+                if (cfg.execMode == PingConfig.MODE_ASSISTANT) {
+                    vpnFilterMatched = true
+                    vpnFilterChecked = true
+                } else if (!vpnFilterChecked) {
                     if (ensureShellReady(cfg)) {
                         vpnFilterMatched = checkVpnPackageMatches(cfg)
                         vpnFilterChecked = true
                     } else {
-                        setStatus("Menunggu akses ${cfg.execMode}...", forceNotif = true)
+                        setStatus("Menunggu akses ${modeDisplayName(cfg.execMode)}...", forceNotif = true)
                         interruptibleSleep((cfg.shizukuRetrySec * 1000.0).toLong())
                         continue
                     }
@@ -329,10 +383,10 @@ class PingService : Service() {
             }
 
             if (!ensureShellReady(cfg)) {
-                val msg = if (cfg.execMode == PingConfig.MODE_SHIZUKU) {
-                    "Menunggu Shizuku aktif (${cfg.shizukuRetrySec}s)..."
-                } else {
-                    "Gagal akses Root (su), coba lagi..."
+                val msg = when (cfg.execMode) {
+                    PingConfig.MODE_SHIZUKU -> "Menunggu Shizuku aktif (${cfg.shizukuRetrySec}s)..."
+                    PingConfig.MODE_ASSISTANT -> "PingIP belum dipilih sebagai Asisten Digital..."
+                    else -> "Gagal akses Root (su), coba lagi..."
                 }
                 if (lastPauseReason != "shell") {
                     lastPauseReason = "shell"
@@ -344,7 +398,7 @@ class PingService : Service() {
             }
 
             if (lastPauseReason != null) {
-                addLog("LANJUT - Pemantauan aktif")
+                addLog("LANJUT - Pemantauan aktif (IP: $currentCellIp)")
                 lastPauseReason = null
             }
 
@@ -356,7 +410,7 @@ class PingService : Service() {
             if (latency >= 0L) {
                 failCount = 0
                 consecutiveToggles = 0
-                setStatus("Aktif - OK (${latency}ms)", forceNotif = false)
+                setStatus("Aktif - OK (${latency}ms) • IP: $currentCellIp", forceNotif = false)
                 if (!cfg.compactLog) {
                     addLog("OK (${latency}ms)")
                 }
@@ -378,19 +432,19 @@ class PingService : Service() {
                         continue
                     }
 
-                    addLog("Mode Pesawat ON-OFF (${cfg.airplaneDelaySec}s)...")
+                    val oldIp = currentCellIp
+                    val startGen = cellLinkGeneration
+                    addLog("Mode Pesawat ON-OFF (${cfg.airplaneDelaySec}s) | IP Lama: $oldIp")
                     setStatus("Mode Pesawat (${cfg.airplaneDelaySec}s)...", forceNotif = true)
-                    executeAirplaneToggle(cfg)
+                    val ok = executeAirplaneToggle(cfg)
                     failCount = 0
                     consecutiveToggles++
 
-                    val useAntiLoop = cfg.antiLoopLimit > 0 && consecutiveToggles >= cfg.antiLoopLimit
-                    val cdSec = if (useAntiLoop) cfg.antiLoopCooldownSec else cfg.cooldownSec
-                    if (useAntiLoop) {
-                        addLog("ANTI-LOOP (${consecutiveToggles}x tanpa OK) -> Cooldown ${cdSec}s")
-                        waitCooldown(cdSec, "Anti-Loop (${cdSec}s)")
+                    if (ok) {
+                        val useAntiLoop = cfg.antiLoopLimit > 0 && consecutiveToggles >= cfg.antiLoopLimit
+                        waitAfterAirplaneToggle(cfg, oldIp, startGen, useAntiLoop, consecutiveToggles)
                     } else {
-                        waitCooldown(cdSec, "Cooldown (${cdSec}s)")
+                        interruptibleSleep(1500L)
                     }
                 } else {
                     interruptibleSleep((cfg.intervalSec * 1000.0).toLong())
@@ -399,8 +453,76 @@ class PingService : Service() {
         }
     }
 
+    private fun waitAfterAirplaneToggle(
+        cfg: PingConfig,
+        oldIp: String,
+        startGen: Int,
+        isAntiLoop: Boolean,
+        consecutiveToggles: Int
+    ) {
+        if (isAntiLoop) {
+            val cdSec = cfg.antiLoopCooldownSec
+            addLog("ANTI-LOOP (${consecutiveToggles}x tanpa OK) -> Cooldown ${cdSec}s")
+            waitCooldown(cdSec, "Anti-Loop (${cdSec}s)")
+            return
+        }
+
+        if (cfg.postToggleMode == PingConfig.POST_IP_CHANGE) {
+            waitForNewIpAndStabilize(cfg, oldIp, startGen)
+        } else {
+            waitCooldown(cfg.cooldownSec, "Cooldown (${cfg.cooldownSec}s)")
+        }
+    }
+
+    private fun waitForNewIpAndStabilize(cfg: PingConfig, oldIp: String, startGen: Int) {
+        val maxWaitMs = (cfg.ipWaitMaxSec * 1000.0).toLong().coerceAtLeast(2000L)
+        val tStart = SystemClock.elapsedRealtime()
+        val deadline = tStart + maxWaitMs
+        setStatus("Menunggu IP baru...", forceNotif = true)
+
+        var detected = false
+        while (runningFlag.get()) {
+            if (isManuallyPaused || manualResetRequested.get()) return
+            if (cfg.pauseOnWifi && isWifiActive) return
+            if (isMobileDataEnabledNativeOnly() == false) return
+
+            val now = SystemClock.elapsedRealtime()
+            val curIp = currentCellIp
+            val ipChanged = (curIp != "-" && curIp != oldIp)
+            val linkReconnected = (curIp != "-" && cellLinkGeneration > startGen && (now - tStart) >= 350L)
+
+            if (ipChanged || linkReconnected) {
+                detected = true
+                val secStr = String.format(Locale.US, "%.1f", (now - tStart) / 1000.0)
+                if (curIp != oldIp && oldIp != "-") {
+                    addLog("IP Baru: $oldIp -> $curIp (${secStr}s)")
+                } else {
+                    addLog("IP Aktif: $curIp (${secStr}s)")
+                }
+                break
+            }
+
+            val rem = deadline - now
+            if (rem <= 0L) break
+            interruptibleSleep(rem.coerceAtMost(200L))
+        }
+
+        if (!runningFlag.get() || isManuallyPaused || manualResetRequested.get()) return
+        if (cfg.pauseOnWifi && isWifiActive) return
+        if (isMobileDataEnabledNativeOnly() == false) return
+
+        if (!detected) {
+            addLog("WARN - Batas tunggu IP (${cfg.ipWaitMaxSec}s) habis, lanjut cek...")
+            return
+        }
+
+        if (cfg.ipStabilizeSec > 0.001) {
+            waitCooldown(cfg.ipStabilizeSec, "Stabilisasi VPN (${cfg.ipStabilizeSec}s)...")
+        }
+    }
+
     private fun waitCooldown(seconds: Double, label: String) {
-        val totalMs = (seconds * 1000.0).toLong().coerceAtLeast(250L)
+        val totalMs = (seconds * 1000.0).toLong().coerceAtLeast(200L)
         val endAt = SystemClock.elapsedRealtime() + totalMs
         setStatus(label, forceNotif = true)
         while (runningFlag.get()) {
@@ -410,11 +532,36 @@ class PingService : Service() {
             if (isMobileDataEnabledNativeOnly() == false) return
             val rem = endAt - SystemClock.elapsedRealtime()
             if (rem <= 0L) return
-            interruptibleSleep(rem.coerceAtMost(250L))
+            interruptibleSleep(rem.coerceAtMost(200L))
         }
     }
 
-    private fun executeAirplaneToggle(cfg: PingConfig) {
+    private fun executeAirplaneToggle(cfg: PingConfig): Boolean {
+        if (cfg.execMode == PingConfig.MODE_ASSISTANT) {
+            val svc = PingAssistantService.instance
+            if (svc == null) {
+                addLog("ERROR - Asisten Digital belum aktif (setel di Pengaturan)")
+                return false
+            }
+            val okOn = svc.triggerAirplaneMode(true)
+            if (!okOn) {
+                addLog("ERROR - Gagal memicu Asisten Mode Pesawat ON")
+                return false
+            }
+            val holdMs = maxOf(350L, (cfg.airplaneDelaySec * 1000.0).toLong())
+            interruptibleSleep(holdMs)
+            val okOff = svc.triggerAirplaneMode(false)
+            if (!okOff) {
+                addLog("ERROR - Gagal memicu Asisten Mode Pesawat OFF")
+                return false
+            }
+            toggleCount++
+            lastToggleTime = nowStr()
+            addLog("Mode Pesawat (Asisten) selesai (Toggle #${toggleCount})")
+            notifyUi()
+            return true
+        }
+
         val cmd = if (cfg.airplaneDelaySec <= 0.001) {
             "(cmd connectivity airplane-mode enable || settings put global airplane_mode_on 1) >/dev/null 2>&1; " +
                 "(cmd connectivity airplane-mode disable || settings put global airplane_mode_on 0) >/dev/null 2>&1; echo DONE"
@@ -425,13 +572,15 @@ class PingService : Service() {
                 "(cmd connectivity airplane-mode disable || settings put global airplane_mode_on 0) >/dev/null 2>&1; echo DONE"
         }
         val out = execShell(cfg, cmd, 12_000L)
-        if (out != null && out.contains("DONE")) {
+        return if (out != null && out.contains("DONE")) {
             toggleCount++
             lastToggleTime = nowStr()
             addLog("Mode Pesawat selesai (Toggle #${toggleCount})")
             notifyUi()
+            true
         } else {
             addLog("ERROR - Gagal eksekusi Mode Pesawat (${out ?: "null"})")
+            false
         }
     }
 
@@ -532,7 +681,7 @@ class PingService : Service() {
                     stream.use { s ->
                         val buf = ByteArray(256)
                         while (s.read(buf) != -1) {
-                            // Drain empty/tiny body so socket returns cleanly to Keep-Alive pool
+                            // Drain response stream for clean Keep-Alive reuse
                         }
                     }
                 }
@@ -589,6 +738,7 @@ class PingService : Service() {
         try {
             for (net in c.allNetworks) {
                 c.getNetworkCapabilities(net)?.let { activeCaps[net] = it }
+                c.getLinkProperties(net)?.let { activeLinks[net] = it }
             }
             recomputeNetworkFlags()
         } catch (_: Throwable) {}
@@ -600,17 +750,29 @@ class PingService : Service() {
             override fun onAvailable(network: Network) {
                 try {
                     c.getNetworkCapabilities(network)?.let { activeCaps[network] = it }
+                    c.getLinkProperties(network)?.let { activeLinks[network] = it }
                 } catch (_: Throwable) {}
                 recomputeNetworkFlags()
             }
 
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 activeCaps[network] = caps
+                if (!activeLinks.containsKey(network)) {
+                    try {
+                        c.getLinkProperties(network)?.let { activeLinks[network] = it }
+                    } catch (_: Throwable) {}
+                }
+                recomputeNetworkFlags()
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                activeLinks[network] = linkProperties
                 recomputeNetworkFlags()
             }
 
             override fun onLost(network: Network) {
                 activeCaps.remove(network)
+                activeLinks.remove(network)
                 recomputeNetworkFlags()
             }
         }
@@ -623,18 +785,42 @@ class PingService : Service() {
     private fun recomputeNetworkFlags() {
         var wifi = false
         var vpn = false
-        for (caps in activeCaps.values) {
+        var foundCellIp: String? = null
+
+        for ((net, caps) in activeCaps) {
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) wifi = true
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) vpn = true
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            ) {
+                val lp = activeLinks[net] ?: try { cm?.getLinkProperties(net) } catch (_: Throwable) { null }
+                val ip = extractBestIp(lp)
+                if (ip != null) foundCellIp = ip
+            }
         }
+
         val prevWifi = isWifiActive
         val prevVpn = isVpnActive
+        val prevCellIp = currentCellIp
+        val newCellIp = foundCellIp ?: "-"
+
         isWifiActive = wifi
         isVpnActive = vpn
         if (!vpn || (!prevVpn && vpn)) {
             vpnFilterChecked = false
         }
-        if (prevWifi != wifi || prevVpn != vpn) {
+
+        var stateChanged = (prevWifi != wifi || prevVpn != vpn)
+        if (newCellIp != prevCellIp) {
+            currentCellIp = newCellIp
+            if (newCellIp != "-") {
+                cellLinkGeneration++
+            }
+            stateChanged = true
+            notifyUi()
+        }
+
+        if (stateChanged) {
             wakeWorker()
         }
     }
@@ -663,11 +849,13 @@ class PingService : Service() {
     private fun isMobileDataEnabled(cfg: PingConfig): Boolean {
         val nativeVal = isMobileDataEnabledNativeOnly()
         if (nativeVal != null) return nativeVal
+        if (cfg.execMode == PingConfig.MODE_ASSISTANT) return true
         val out = execShell(cfg, "settings get global mobile_data", 2500L)?.trim()
         return out != "0"
     }
 
     private fun checkVpnPackageMatches(cfg: PingConfig): Boolean {
+        if (cfg.execMode == PingConfig.MODE_ASSISTANT) return true
         val pkgs = cfg.vpnPackageFilter.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         if (pkgs.isEmpty()) return true
         val patterns = mutableListOf<String>()
@@ -687,12 +875,14 @@ class PingService : Service() {
     }
 
     private fun ensureShellReady(cfg: PingConfig): Boolean {
-        return if (cfg.execMode == PingConfig.MODE_SHIZUKU) {
-            val svc = shizukuService
-            if (svc != null && svc.asBinder().pingBinder()) return true
-            tryRebindShizukuBlocking()
-        } else {
-            rootShell.ensureOpen()
+        return when (cfg.execMode) {
+            PingConfig.MODE_ASSISTANT -> PingAssistantService.instance != null
+            PingConfig.MODE_SHIZUKU -> {
+                val svc = shizukuService
+                if (svc != null && svc.asBinder().pingBinder()) true
+                else tryRebindShizukuBlocking()
+            }
+            else -> rootShell.ensureOpen()
         }
     }
 
@@ -709,7 +899,7 @@ class PingService : Service() {
                 .daemon(false)
                 .processNameSuffix("shizuku_shell")
                 .debuggable(false)
-                .version(47)
+                .version(48)
             shizukuArgs = args
             Shizuku.bindUserService(args, shizukuConn)
             latch.await(3500L, TimeUnit.MILLISECONDS)
@@ -732,18 +922,20 @@ class PingService : Service() {
     }
 
     private fun execShell(cfg: PingConfig, cmd: String, timeoutMs: Long): String? {
-        return if (cfg.execMode == PingConfig.MODE_SHIZUKU) {
-            if (!ensureShellReady(cfg)) return null
-            try {
-                shizukuService?.exec(cmd)
-            } catch (_: Throwable) {
-                shizukuService = null
-                if (tryRebindShizukuBlocking()) {
-                    try { shizukuService?.exec(cmd) } catch (_: Throwable) { null }
-                } else null
+        return when (cfg.execMode) {
+            PingConfig.MODE_ASSISTANT -> null
+            PingConfig.MODE_SHIZUKU -> {
+                if (!ensureShellReady(cfg)) return null
+                try {
+                    shizukuService?.exec(cmd)
+                } catch (_: Throwable) {
+                    shizukuService = null
+                    if (tryRebindShizukuBlocking()) {
+                        try { shizukuService?.exec(cmd) } catch (_: Throwable) { null }
+                    } else null
+                }
             }
-        } else {
-            rootShell.exec(cmd, timeoutMs)
+            else -> rootShell.exec(cmd, timeoutMs)
         }
     }
 
@@ -763,6 +955,12 @@ class PingService : Service() {
     }
 
     private fun nowStr(): String = LocalTime.now().format(TIME_FMT)
+
+    private fun modeDisplayName(m: String): String = when (m) {
+        PingConfig.MODE_SHIZUKU -> "SHIZUKU"
+        PingConfig.MODE_ASSISTANT -> "ASISTEN"
+        else -> "ROOT"
+    }
 
     private fun methodDisplayName(m: String): String = when (m) {
         PingConfig.PING_HTTP_204 -> "HTTP 204"
@@ -823,7 +1021,7 @@ class PingService : Service() {
         val noIcon: Icon? = null
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tile)
-            .setContentTitle("PingIP v4.6.1 • Toggle: ${toggleCount}x")
+            .setContentTitle("PingIP v4.7 • Toggle: ${toggleCount}x")
             .setContentText(statusText)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

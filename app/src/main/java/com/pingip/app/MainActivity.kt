@@ -41,6 +41,7 @@ class MainActivity : Activity(), PingService.UiListener {
     private lateinit var tvStats: TextView
     private lateinit var tvMeta: TextView
     private lateinit var btnBattery: Button
+    private lateinit var btnAssistant: Button
     private lateinit var btnToggle: Button
     private lateinit var btnPause: Button
     private lateinit var btnResetIp: Button
@@ -64,6 +65,9 @@ class MainActivity : Activity(), PingService.UiListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try { Shizuku.addRequestPermissionResultListener(shizukuPermListener) } catch (_: Throwable) {}
+        if (!PingService.isRunning) {
+            PingService.refreshStaticCellIp(this)
+        }
         buildLayout()
         requestNotifPermissionIfNeeded()
     }
@@ -71,6 +75,9 @@ class MainActivity : Activity(), PingService.UiListener {
     override fun onStart() {
         super.onStart()
         PingService.setUiListener(this)
+        if (!PingService.isRunning) {
+            PingService.refreshStaticCellIp(this)
+        }
         refreshUi()
         handler.removeCallbacks(statsTicker)
         if (PingService.isRunning) handler.postDelayed(statsTicker, 1000L)
@@ -130,7 +137,7 @@ class MainActivity : Activity(), PingService.UiListener {
             gravity = Gravity.CENTER_VERTICAL
         }
         val title = TextView(this).apply {
-            text = "PingIP v4.6.1"
+            text = "PingIP v4.7"
             setTextColor(Color.parseColor("#F8FAFC"))
             textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
@@ -164,7 +171,7 @@ class MainActivity : Activity(), PingService.UiListener {
             typeface = Typeface.DEFAULT_BOLD
         }
         tvStats = TextView(this).apply {
-            text = "Aktif: 00:00:00 • Toggle: 0x • Terakhir: -"
+            text = "Aktif: 00:00:00 • Toggle: 0x • IP: -"
             setTextColor(Color.parseColor("#CBD5E1"))
             textSize = 12f
             setPadding(0, dp(4), 0, 0)
@@ -188,6 +195,16 @@ class MainActivity : Activity(), PingService.UiListener {
             setOnClickListener { openBatteryOptimization() }
         }
         root.addView(btnBattery)
+
+        btnAssistant = makeBtn("ATUR PINGIP SEBAGAI ASISTEN DIGITAL", "#38BDF8", "#0F172A").apply {
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+            setOnClickListener { openAssistantSettings() }
+        }
+        root.addView(btnAssistant)
 
         val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -299,7 +316,7 @@ class MainActivity : Activity(), PingService.UiListener {
             when {
                 !running -> Color.parseColor("#94A3B8")
                 PingService.currentStatus.contains("TIMEOUT") || PingService.currentStatus.contains("ERROR") -> Color.parseColor("#F87171")
-                PingService.currentStatus.contains("JEDA") || PingService.currentStatus.contains("Cooldown") -> Color.parseColor("#FBBF24")
+                PingService.currentStatus.contains("JEDA") || PingService.currentStatus.contains("Cooldown") || PingService.currentStatus.contains("Menunggu") -> Color.parseColor("#FBBF24")
                 else -> Color.parseColor("#34D399")
             }
         )
@@ -307,14 +324,24 @@ class MainActivity : Activity(), PingService.UiListener {
         val uptime = if (running && PingService.startTimeElapsed > 0L) {
             formatDuration((SystemClock.elapsedRealtime() - PingService.startTimeElapsed) / 1000L)
         } else "00:00:00"
-        tvStats.text = "Aktif: $uptime • Toggle: ${PingService.toggleCount}x • Terakhir: ${PingService.lastToggleTime}"
+        tvStats.text = "Aktif: $uptime • Toggle: ${PingService.toggleCount}x • IP: ${PingService.currentCellIp}"
 
+        val modeStr = when (cfg.execMode) {
+            PingConfig.MODE_SHIZUKU -> "SHIZUKU"
+            PingConfig.MODE_ASSISTANT -> "ASISTEN"
+            else -> "ROOT"
+        }
         val methodStr = when (cfg.pingMethod) {
             PingConfig.PING_HTTP_204 -> "HTTP 204"
             PingConfig.PING_TCP_443 -> "TCP 443"
             else -> "HTTPS HEAD"
         }
-        tvMeta.text = "${cfg.execMode.uppercase(Locale.US)} • $methodStr • ${cfg.targetPrimary} • Interval ${cfg.intervalSec}s"
+        val postStr = if (cfg.postToggleMode == PingConfig.POST_IP_CHANGE) {
+            "Tunggu IP (+${cfg.ipStabilizeSec}s)"
+        } else {
+            "Cooldown ${cfg.cooldownSec}s"
+        }
+        tvMeta.text = "$modeStr • $methodStr • ${cfg.targetPrimary} • $postStr"
 
         btnToggle.text = if (running) "STOP PINGIP" else "MULAI PINGIP"
         btnToggle.background = roundedBg(if (running) "#EF4444" else "#10B981", 10)
@@ -326,6 +353,9 @@ class MainActivity : Activity(), PingService.UiListener {
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         btnBattery.visibility = if (pm.isIgnoringBatteryOptimizations(packageName)) View.GONE else View.VISIBLE
+
+        val needAssistantBtn = (cfg.execMode == PingConfig.MODE_ASSISTANT) && !PingAssistantService.isAssistantActive(this)
+        btnAssistant.visibility = if (needAssistantBtn) View.VISIBLE else View.GONE
 
         val logs = PingService.getLogsSnapshot()
         if (tvLog.text.toString() != logs) {
@@ -350,6 +380,16 @@ class MainActivity : Activity(), PingService.UiListener {
                 }
             } catch (_: Throwable) {
                 Toast.makeText(this, "Gagal menghubungi Shizuku", Toast.LENGTH_SHORT).show()
+            }
+        } else if (cfg.execMode == PingConfig.MODE_ASSISTANT) {
+            if (!PingAssistantService.isAssistantActive(this)) {
+                AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                    .setTitle("Asisten Digital Belum Aktif")
+                    .setMessage("Untuk mode Non-Root, pilih PingIP sebagai Aplikasi Asisten Digital bawaan di Pengaturan HP.")
+                    .setNegativeButton("NANTI", null)
+                    .setPositiveButton("BUKA PENGATURAN") { _, _ -> openAssistantSettings() }
+                    .show()
+                return
             }
         }
         val intent = Intent(this, PingService::class.java).setAction(PingService.ACTION_START)
@@ -402,13 +442,30 @@ class MainActivity : Activity(), PingService.UiListener {
         }
 
         addSectionLabel("Mode Eksekusi")
-        val rgMode = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-        val rbShizuku = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "Shizuku  " })
-        val rbRoot = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "Root (1 Sesi su)" })
-        rgMode.addView(rbShizuku)
+        val rgMode = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val rbRoot = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "Root (1 Sesi su - Tanpa Kedip)" })
+        val rbShizuku = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "Shizuku (Tanpa Root & Tanpa Kedip)" })
+        val rbAssistant = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "Non-Root (Asisten Digital)" })
         rgMode.addView(rbRoot)
-        rgMode.check(if (cfg.execMode == PingConfig.MODE_SHIZUKU) rbShizuku.id else rbRoot.id)
+        rgMode.addView(rbShizuku)
+        rgMode.addView(rbAssistant)
+        rgMode.check(
+            when (cfg.execMode) {
+                PingConfig.MODE_SHIZUKU -> rbShizuku.id
+                PingConfig.MODE_ASSISTANT -> rbAssistant.id
+                else -> rbRoot.id
+            }
+        )
         box.addView(rgMode)
+
+        addSectionLabel("Setelah Mode Pesawat")
+        val rgPost = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val rbIpChange = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "Tunggu IP Baru (Dinamis + Stabilisasi)" })
+        val rbCooldown = styleRadio(RadioButton(this).apply { id = View.generateViewId(); text = "Cooldown Tetap (Detik)" })
+        rgPost.addView(rbIpChange)
+        rgPost.addView(rbCooldown)
+        rgPost.check(if (cfg.postToggleMode == PingConfig.POST_COOLDOWN) rbCooldown.id else rbIpChange.id)
+        box.addView(rgPost)
 
         addSectionLabel("Metode Cek Ping (Keep-Alive Aktif)")
         val rgPing = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
@@ -435,7 +492,7 @@ class MainActivity : Activity(), PingService.UiListener {
             setPadding(0, dp(8), 0, dp(4))
         }
         val cbCompact = CheckBox(this).apply {
-            text = "Mode Log Ringkas (hanya catat RTO/Jeda/Toggle)"
+            text = "Mode Log Ringkas (hanya catat RTO/IP/Toggle)"
             isChecked = cfg.compactLog
             setTextColor(Color.parseColor("#F1F5F9"))
             textSize = 13.5f
@@ -449,18 +506,20 @@ class MainActivity : Activity(), PingService.UiListener {
         val txt = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
 
         val etAirplane = makeEdit("Jeda ON-OFF Mode Pesawat (detik)", cfg.airplaneDelaySec.toString(), "0.0", numDec)
-        val etCooldown = makeEdit("Cooldown Normal setelah Mode Pesawat (detik)", cfg.cooldownSec.toString(), "8.0", numDec)
+        val etIpStab = makeEdit("Jeda Stabilisasi VPN setelah IP Baru (detik, min 0.0)", cfg.ipStabilizeSec.toString(), "1.5", numDec)
+        val etIpMax = makeEdit("Batas Tunggu IP Baru Maksimal (detik)", cfg.ipWaitMaxSec.toString(), "15.0", numDec)
+        val etCooldown = makeEdit("Cooldown Tetap setelah Mode Pesawat (detik)", cfg.cooldownSec.toString(), "8.0", numDec)
         val etInterval = makeEdit("Interval Cek Ping (detik)", cfg.intervalSec.toString(), "1.0", numDec)
         val etTimeout = makeEdit("Timeout Maksimal Ping (detik)", cfg.timeoutSec.toString(), "1.0", numDec)
         val etFail = makeEdit("Batas Gagal RTO (kali)", cfg.failThreshold.toString(), "2", numInt)
         val etAntiLimit = makeEdit("Anti-Loop: Batas Toggle Beruntun Tanpa OK (0 = nonaktif)", cfg.antiLoopLimit.toString(), "10", numInt)
         val etAntiCd = makeEdit("Anti-Loop: Cooldown Saat Melambat (detik)", cfg.antiLoopCooldownSec.toString(), "30.0", numDec)
         val etWatcher = makeEdit("Kecepatan Watcher Native (detik, min 0.2)", cfg.watcherSec.toString(), "0.5", numDec)
-        val etShizukuRetry = makeEdit("Coba Ulang Shizuku di Awal (detik, min 0.5)", cfg.shizukuRetrySec.toString(), "2.0", numDec)
+        val etShizukuRetry = makeEdit("Coba Ulang Shizuku/Asisten di Awal (detik, min 0.5)", cfg.shizukuRetrySec.toString(), "2.0", numDec)
         val etMaxLog = makeEdit("Batas Baris Log Layar", cfg.maxLogLines.toString(), "100", numInt)
         val etPrimary = makeEdit("Target Ping Utama", cfg.targetPrimary, "cp.cloudflare.com/generate_204 / 1.1.1.1", txt)
         val etBackup = makeEdit("Target Ping Cadangan (opsional, kosong = nonaktif)", cfg.targetBackup, "contoh: connectivitycheck.gstatic.com/generate_204", txt)
-        val etVpnFilter = makeEdit("Filter Paket VPN (kosongkan = semua VPN, bisa koma)", cfg.vpnPackageFilter, "xyz.easypro.httpcustom", txt)
+        val etVpnFilter = makeEdit("Filter Paket VPN (Root/Shizuku, kosong = semua VPN)", cfg.vpnPackageFilter, "xyz.easypro.httpcustom", txt)
 
         rgPing.setOnCheckedChangeListener { _, checkedId ->
             val cur = etPrimary.text.toString().trim()
@@ -478,12 +537,18 @@ class MainActivity : Activity(), PingService.UiListener {
         scroll.addView(box)
 
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Pengaturan PingIP v4.6.1")
+            .setTitle("Pengaturan PingIP v4.7")
             .setView(scroll)
             .setNegativeButton("BATAL", null)
             .setPositiveButton("SIMPAN") { _, _ ->
+                val chosenMode = when (rgMode.checkedRadioButtonId) {
+                    rbShizuku.id -> PingConfig.MODE_SHIZUKU
+                    rbAssistant.id -> PingConfig.MODE_ASSISTANT
+                    else -> PingConfig.MODE_ROOT
+                }
                 val newCfg = PingConfig(
-                    execMode = if (rgMode.checkedRadioButtonId == rbShizuku.id) PingConfig.MODE_SHIZUKU else PingConfig.MODE_ROOT,
+                    execMode = chosenMode,
+                    postToggleMode = if (rgPost.checkedRadioButtonId == rbCooldown.id) PingConfig.POST_COOLDOWN else PingConfig.POST_IP_CHANGE,
                     pingMethod = when (rgPing.checkedRadioButtonId) {
                         rbHttp204.id -> PingConfig.PING_HTTP_204
                         rbTcp.id -> PingConfig.PING_TCP_443
@@ -492,6 +557,8 @@ class MainActivity : Activity(), PingService.UiListener {
                     pauseOnWifi = cbWifi.isChecked,
                     compactLog = cbCompact.isChecked,
                     airplaneDelaySec = etAirplane.text.toString().toDoubleOrNull() ?: cfg.airplaneDelaySec,
+                    ipStabilizeSec = etIpStab.text.toString().toDoubleOrNull() ?: cfg.ipStabilizeSec,
+                    ipWaitMaxSec = etIpMax.text.toString().toDoubleOrNull() ?: cfg.ipWaitMaxSec,
                     cooldownSec = etCooldown.text.toString().toDoubleOrNull() ?: cfg.cooldownSec,
                     intervalSec = etInterval.text.toString().toDoubleOrNull() ?: cfg.intervalSec,
                     timeoutSec = etTimeout.text.toString().toDoubleOrNull() ?: cfg.timeoutSec,
@@ -513,6 +580,9 @@ class MainActivity : Activity(), PingService.UiListener {
                     Toast.makeText(this, "Pengaturan disimpan", Toast.LENGTH_SHORT).show()
                 }
                 refreshUi()
+                if (chosenMode == PingConfig.MODE_ASSISTANT && !PingAssistantService.isAssistantActive(this)) {
+                    openAssistantSettings()
+                }
             }
             .show()
     }
@@ -525,6 +595,19 @@ class MainActivity : Activity(), PingService.UiListener {
             startActivity(intent)
         } catch (_: Throwable) {
             try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: Throwable) {}
+        }
+    }
+
+    private fun openAssistantSettings() {
+        Toast.makeText(this, "Pilih 'PingIP' sebagai Aplikasi Asisten Digital", Toast.LENGTH_LONG).show()
+        try {
+            startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+        } catch (_: Throwable) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+            } catch (_: Throwable) {
+                try { startActivity(Intent(Settings.ACTION_SETTINGS)) } catch (_: Throwable) {}
+            }
         }
     }
 

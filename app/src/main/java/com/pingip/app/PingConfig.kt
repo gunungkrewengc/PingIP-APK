@@ -4,10 +4,13 @@ import android.content.Context
 
 data class PingConfig(
     val execMode: String = MODE_ROOT,
+    val postToggleMode: String = POST_IP_CHANGE,
     val pingMethod: String = PING_HTTP_204,
     val pauseOnWifi: Boolean = true,
     val compactLog: Boolean = false,
     val airplaneDelaySec: Double = 0.0,
+    val ipStabilizeSec: Double = 1.5,
+    val ipWaitMaxSec: Double = 15.0,
     val cooldownSec: Double = 8.0,
     val intervalSec: Double = 1.0,
     val timeoutSec: Double = 1.0,
@@ -25,6 +28,10 @@ data class PingConfig(
         const val PREFS = "pingip_v4_prefs"
         const val MODE_ROOT = "root"
         const val MODE_SHIZUKU = "shizuku"
+        const val MODE_ASSISTANT = "assistant"
+
+        const val POST_IP_CHANGE = "ip_change"
+        const val POST_COOLDOWN = "cooldown"
 
         const val PING_HTTP_204 = "http_204"
         const val PING_HTTPS_HEAD = "https_head"
@@ -34,10 +41,13 @@ data class PingConfig(
             val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             return PingConfig(
                 execMode = p.getString("exec_mode", MODE_ROOT) ?: MODE_ROOT,
+                postToggleMode = p.getString("post_toggle_mode", POST_IP_CHANGE) ?: POST_IP_CHANGE,
                 pingMethod = p.getString("ping_method", PING_HTTP_204) ?: PING_HTTP_204,
                 pauseOnWifi = p.getBoolean("pause_on_wifi", true),
                 compactLog = p.getBoolean("compact_log", false),
                 airplaneDelaySec = p.getFloat("airplane_delay_sec", 0.0f).toDouble().coerceIn(0.0, 30.0),
+                ipStabilizeSec = p.getFloat("ip_stabilize_sec", 1.5f).toDouble().coerceIn(0.0, 30.0),
+                ipWaitMaxSec = p.getFloat("ip_wait_max_sec", 15.0f).toDouble().coerceIn(2.0, 120.0),
                 cooldownSec = p.getFloat("cooldown_sec", 8.0f).toDouble().coerceIn(0.5, 120.0),
                 intervalSec = p.getFloat("interval_sec", 1.0f).toDouble().coerceIn(0.2, 60.0),
                 timeoutSec = p.getFloat("timeout_sec", 1.0f).toDouble().coerceIn(0.3, 15.0),
@@ -58,10 +68,13 @@ data class PingConfig(
         fun save(context: Context, cfg: PingConfig) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString("exec_mode", cfg.execMode)
+                .putString("post_toggle_mode", cfg.postToggleMode)
                 .putString("ping_method", cfg.pingMethod)
                 .putBoolean("pause_on_wifi", cfg.pauseOnWifi)
                 .putBoolean("compact_log", cfg.compactLog)
                 .putFloat("airplane_delay_sec", cfg.airplaneDelaySec.coerceIn(0.0, 30.0).toFloat())
+                .putFloat("ip_stabilize_sec", cfg.ipStabilizeSec.coerceIn(0.0, 30.0).toFloat())
+                .putFloat("ip_wait_max_sec", cfg.ipWaitMaxSec.coerceIn(2.0, 120.0).toFloat())
                 .putFloat("cooldown_sec", cfg.cooldownSec.coerceIn(0.5, 120.0).toFloat())
                 .putFloat("interval_sec", cfg.intervalSec.coerceIn(0.2, 60.0).toFloat())
                 .putFloat("timeout_sec", cfg.timeoutSec.coerceIn(0.3, 15.0).toFloat())

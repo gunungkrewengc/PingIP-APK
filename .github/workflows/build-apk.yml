@@ -1,4 +1,4 @@
-name: Build PingIP v4.6.1 Ultra-Slim APK
+name: Build PingIP v4.7 Ultra-Slim APK
 
 on:
   push:
@@ -30,11 +30,11 @@ jobs:
         run: |
           mkdir -p out
           APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          cp "$APK_FILE" out/PingIP-v4.6.1-UltraSlim.apk
-          ls -lh out/PingIP-v4.6.1-UltraSlim.apk
+          cp "$APK_FILE" out/PingIP-v4.7-UltraSlim.apk
+          ls -lh out/PingIP-v4.7-UltraSlim.apk
 
       - name: Upload APK ke Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: PingIP-v4.6.1-UltraSlim-APK
-          path: out/PingIP-v4.6.1-UltraSlim.apk
+          name: PingIP-v4.7-UltraSlim-APK
+          path: out/PingIP-v4.7-UltraSlim.apk

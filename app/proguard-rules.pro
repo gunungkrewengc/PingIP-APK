@@ -1,6 +1,9 @@
 -keep class com.pingip.app.ShellUserService { *; }
 -keep class com.pingip.app.IShellService { *; }
 -keep class com.pingip.app.IShellService$** { *; }
+-keep class com.pingip.app.PingAssistantService { *; }
+-keep class com.pingip.app.PingAssistantSessionService { *; }
+-keep class com.pingip.app.PingAssistantSession { *; }
 -keep class rikka.shizuku.** { *; }
 -keep interface rikka.shizuku.** { *; }
 -dontwarn rikka.shizuku.**
